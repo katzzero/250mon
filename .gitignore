@@ -1,0 +1,7 @@
+*.log
+*.csv
+*.jsonl
+*.swp
+*.swo
+*~
+.DS_Store

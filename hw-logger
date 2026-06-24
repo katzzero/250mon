@@ -1,0 +1,380 @@
+#!/usr/bin/env bash
+#
+# hw-logger - Log GPU and CPU metrics for AMD Cyan Skillfish (BC-250) APU
+#
+
+set -euo pipefail
+
+VERSION="1.0.0"
+
+usage() {
+    cat <<EOF
+hw-logger v${VERSION} - AMD Cyan Skillfish hardware logger
+
+Usage: hw-logger [OPTIONS]
+
+Component selection (default: both GPU and CPU):
+  --gpu               Log GPU metrics only
+  --cpu               Log CPU metrics only
+
+Options:
+  -i, --interval MS   Sampling interval in milliseconds (default: 1000)
+  -f, --format FMT    Output format: csv or json (default: csv)
+  -o, --output FILE   Log to file (also prints to stdout unless --quiet)
+  -q, --quiet         Suppress stdout, write to file only
+  -c, --count N       Number of samples then exit (default: infinite)
+  -h, --help          Show this help message
+  -v, --version       Show version
+
+GPU Metrics:
+  gpu_freq_mhz        GPU shader clock (MHz)
+  gpu_voltage_mv      GPU core voltage (mV)
+  gpu_temp_c          GPU temperature (°C)
+  gpu_load_pct        GPU busy percentage (null if unsupported)
+  gpu_mem_clock_mhz   GPU memory clock (MHz)
+
+CPU Metrics:
+  cpu_freq_mhz        Average CPU frequency (MHz)
+  cpu_temp_c          CPU temperature (°C, from k10temp)
+  cpu_usage_pct       Aggregate CPU usage percentage
+
+Examples:
+  hw-logger                              # Log GPU + CPU every 1s as CSV
+  hw-logger --gpu -i 100 -f json         # GPU only, 100ms interval, JSON
+  hw-logger --cpu -i 500 -c 60           # CPU only, 500ms, 60 samples
+  hw-logger -i 2000 -o hw.csv -q         # Both, to file, quiet
+EOF
+}
+
+VERSION="1.0.0"
+
+# Defaults
+INTERVAL_MS=1000
+FORMAT="csv"
+OUTPUT=""
+QUIET=false
+COUNT=0
+LOG_GPU=true
+LOG_CPU=true
+
+# GPU sysfs base path
+GPU_PATH=""
+
+# Previous CPU stat for usage calculation
+PREV_CPU_TOTAL=0
+PREV_CPU_IDLE=0
+
+# --- Argument parsing ---
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --gpu)
+            LOG_GPU=true
+            LOG_CPU=false
+            shift
+            ;;
+        --cpu)
+            LOG_GPU=false
+            LOG_CPU=true
+            shift
+            ;;
+        -i|--interval)
+            INTERVAL_MS="$2"
+            shift 2
+            ;;
+        -f|--format)
+            FORMAT="$2"
+            shift 2
+            ;;
+        -o|--output)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -q|--quiet)
+            QUIET=true
+            shift
+            ;;
+        -c|--count)
+            COUNT="$2"
+            shift 2
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -v|--version)
+            echo "hw-logger v${VERSION}"
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown option '$1'" >&2
+            usage >&2
+            exit 1
+            ;;
+    esac
+done
+
+# --- Validation ---
+if [[ "$FORMAT" != "csv" && "$FORMAT" != "json" ]]; then
+    echo "Error: Invalid format '$FORMAT'. Use 'csv' or 'json'." >&2
+    exit 1
+fi
+
+if ! [[ "$INTERVAL_MS" =~ ^[0-9]+$ ]] || [[ "$INTERVAL_MS" -lt 1 ]]; then
+    echo "Error: Interval must be a positive integer (ms)." >&2
+    exit 1
+fi
+
+# --- Find GPU sysfs path ---
+find_gpu_path() {
+    local card
+    for card in /sys/class/drm/card*/device; do
+        if [[ -f "$card/pp_dpm_sclk" ]]; then
+            echo "$card"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [[ "$LOG_GPU" == true ]]; then
+    GPU_PATH=$(find_gpu_path) || {
+        echo "Warning: AMD GPU sysfs not found, disabling GPU logging." >&2
+        LOG_GPU=false
+    }
+fi
+
+# --- GPU reading functions ---
+read_gpu_freq() {
+    grep '\*' "$GPU_PATH/pp_dpm_sclk" 2>/dev/null | head -1 | sed -n 's/^[0-9]*: \([0-9]*\)Mhz.*/\1/p'
+}
+
+read_gpu_voltage() {
+    grep '^OD_VDDC:' -A1 "$GPU_PATH/pp_od_clk_voltage" 2>/dev/null | tail -1 | sed -n 's/^[0-9]*: \([0-9]*\)mV.*/\1/p'
+}
+
+read_gpu_temp() {
+    local hwmon_dir="$GPU_PATH/hwmon"
+    local hwmon temp_file raw
+    for hwmon in "$hwmon_dir"/*/; do
+        temp_file="${hwmon}temp1_input"
+        if [[ -f "$temp_file" ]]; then
+            raw=$(cat "$temp_file" 2>/dev/null) || return 0
+            if [[ -n "$raw" ]]; then
+                awk "BEGIN {printf \"%.1f\", $raw / 1000}"
+                return 0
+            fi
+        fi
+    done
+}
+
+read_gpu_load() {
+    local busy_file="$GPU_PATH/gpu_busy_percent"
+    if [[ -f "$busy_file" ]]; then
+        local val
+        val=$(cat "$busy_file" 2>/dev/null) || return 0
+        echo "$val" | tr -d '[:space:]'
+    fi
+}
+
+read_gpu_mem_clock() {
+    grep '\*' "$GPU_PATH/pp_dpm_mclk" 2>/dev/null | head -1 | sed -n 's/^[0-9]*: \([0-9]*\)Mhz.*/\1/p'
+}
+
+# --- CPU reading functions ---
+read_cpu_freq() {
+    # Average frequency across all cores from /proc/cpuinfo
+    awk '/^cpu MHz/ {sum += $4; n++} END {if (n>0) printf "%.0f", sum/n; else print ""}' /proc/cpuinfo 2>/dev/null
+}
+
+read_cpu_temp() {
+    # k10temp from hwmon
+    local hwmon_dir="/sys/class/hwmon"
+    local hwmon name_file temp_file
+    for hwmon in "$hwmon_dir"/*/; do
+        name_file="${hwmon}name"
+        if [[ -f "$name_file" ]]; then
+            name=$(cat "$name_file" 2>/dev/null)
+            if [[ "$name" == "k10temp" ]]; then
+                temp_file="${hwmon}temp1_input"
+                if [[ -f "$temp_file" ]]; then
+                    local raw
+                    raw=$(cat "$temp_file" 2>/dev/null) || return 0
+                    if [[ -n "$raw" ]]; then
+                        awk "BEGIN {printf \"%.1f\", $raw / 1000}"
+                        return 0
+                    fi
+                fi
+            fi
+        fi
+    done
+}
+
+read_cpu_usage() {
+    # Read /proc/stat and calculate CPU usage since last call
+    local vals
+    vals=$(awk '/^cpu / && !/^cpu[0-9]/ {
+        printf "%s %s %s %s %s %s %s %s", $2, $3, $4, $5, $6, $7, $8, $9
+        exit
+    }' /proc/stat 2>/dev/null) || return 0
+
+    local user nice system idle iowait irq softirq steal
+    read -r user nice system idle iowait irq softirq steal <<< "$vals"
+
+    local total=$((user + nice + system + idle + iowait + irq + softirq + steal))
+    local idle_total=$((idle + iowait))
+
+    if [[ "$PREV_CPU_TOTAL" -gt 0 ]]; then
+        local delta_total=$((total - PREV_CPU_TOTAL))
+        local delta_idle=$((idle_total - PREV_CPU_IDLE))
+        if [[ "$delta_total" -gt 0 ]]; then
+            awk "BEGIN {printf \"%.1f\", (1 - $delta_idle / $delta_total) * 100}"
+        fi
+    fi
+
+    PREV_CPU_TOTAL=$total
+    PREV_CPU_IDLE=$idle_total
+}
+
+# --- Output functions ---
+timestamp() {
+    date '+%Y-%m-%dT%H:%M:%S%z'
+}
+
+emit_csv_header() {
+    local header="timestamp"
+    [[ "$LOG_GPU" == true ]] && header+=",gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_load_pct,gpu_mem_clock_mhz"
+    [[ "$LOG_CPU" == true ]] && header+=",cpu_freq_mhz,cpu_temp_c,cpu_usage_pct"
+    echo "$header"
+}
+
+emit_csv() {
+    local ts="$1"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
+    local cpu_freq="$7" cpu_temp="$8" cpu_usage="$9"
+
+    local line="$ts"
+    if [[ "$LOG_GPU" == true ]]; then
+        line+=",${gpu_freq},${gpu_volt},${gpu_temp},${gpu_load},${gpu_mem}"
+    fi
+    if [[ "$LOG_CPU" == true ]]; then
+        line+=",${cpu_freq},${cpu_temp},${cpu_usage}"
+    fi
+    echo "$line"
+}
+
+json_val() {
+    # Return "null" for empty, or the value quoted for strings, unquoted for numbers
+    local val="$1" type="${2:-string}"
+    if [[ -z "$val" ]]; then
+        echo "null"
+    elif [[ "$type" == "string" ]]; then
+        printf '"%s"' "$val"
+    else
+        echo "$val"
+    fi
+}
+
+emit_json() {
+    local ts="$1"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
+    local cpu_freq="$7" cpu_temp="$8" cpu_usage="$9"
+
+    printf '{"timestamp":"%s"' "$ts"
+
+    if [[ "$LOG_GPU" == true ]]; then
+        printf ',"gpu_freq_mhz":%s' "$(json_val "$gpu_freq" num)"
+        printf ',"gpu_voltage_mv":%s' "$(json_val "$gpu_volt" num)"
+        printf ',"gpu_temp_c":%s' "$(json_val "$gpu_temp" num)"
+        printf ',"gpu_load_pct":%s' "$(json_val "$gpu_load" num)"
+        printf ',"gpu_mem_clock_mhz":%s' "$(json_val "$gpu_mem" num)"
+    fi
+
+    if [[ "$LOG_CPU" == true ]]; then
+        printf ',"cpu_freq_mhz":%s' "$(json_val "$cpu_freq" num)"
+        printf ',"cpu_temp_c":%s' "$(json_val "$cpu_temp" num)"
+        printf ',"cpu_usage_pct":%s' "$(json_val "$cpu_usage" num)"
+    fi
+
+    printf '}\n'
+}
+
+# --- Setup ---
+INTERVAL_SEC=$(awk "BEGIN {printf \"%.3f\", $INTERVAL_MS / 1000}")
+
+if [[ -n "$OUTPUT" ]]; then
+    exec 3>"$OUTPUT"
+else
+    exec 3>/dev/null
+fi
+
+cleanup() {
+    exec 3>&- 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# Write header for CSV
+if [[ "$FORMAT" == "csv" ]]; then
+    if [[ -n "$OUTPUT" ]]; then
+        emit_csv_header >&3
+    fi
+    if [[ "$QUIET" == false ]]; then
+        emit_csv_header
+    fi
+fi
+
+# Prime CPU usage reading (first sample needs two readings)
+if [[ "$LOG_CPU" == true ]]; then
+    read_cpu_usage > /dev/null
+    sleep 0.05
+fi
+
+# --- Main loop ---
+sample_count=0
+while true; do
+    ts=$(timestamp)
+
+    # GPU
+    gpu_freq="" gpu_volt="" gpu_temp="" gpu_load="" gpu_mem=""
+    if [[ "$LOG_GPU" == true ]]; then
+        gpu_freq=$(read_gpu_freq) || true
+        gpu_volt=$(read_gpu_voltage) || true
+        gpu_temp=$(read_gpu_temp) || true
+        gpu_load=$(read_gpu_load) || true
+        gpu_mem=$(read_gpu_mem_clock) || true
+    fi
+
+    # CPU
+    cpu_freq="" cpu_temp="" cpu_usage=""
+    if [[ "$LOG_CPU" == true ]]; then
+        cpu_freq=$(read_cpu_freq) || true
+        cpu_temp=$(read_cpu_temp) || true
+        cpu_usage=$(read_cpu_usage) || true
+    fi
+
+    # Output
+    if [[ -n "$OUTPUT" ]]; then
+        case "$FORMAT" in
+            csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                          "$cpu_freq" "$cpu_temp" "$cpu_usage" >&3 ;;
+            json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                            "$cpu_freq" "$cpu_temp" "$cpu_usage" >&3 ;;
+        esac
+    fi
+
+    if [[ "$QUIET" == false ]]; then
+        case "$FORMAT" in
+            csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                          "$cpu_freq" "$cpu_temp" "$cpu_usage" ;;
+            json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                            "$cpu_freq" "$cpu_temp" "$cpu_usage" ;;
+        esac
+    fi
+
+    sample_count=$((sample_count + 1))
+
+    if [[ "$COUNT" -gt 0 && "$sample_count" -ge "$COUNT" ]]; then
+        break
+    fi
+
+    sleep "$INTERVAL_SEC"
+done
