@@ -208,11 +208,6 @@ def cli_plot(timestamps, columns, metrics, width):
 
 def plot_metrics(timestamps, columns, metrics, title, output, width, height, dpi, show_grid):
     """Create multi-panel plot of selected metrics."""
-    if not HAS_MPL:
-        print("Error: matplotlib is required for plotting.", file=sys.stderr)
-        print("Install it: pip install matplotlib", file=sys.stderr)
-        sys.exit(1)
-
     if not metrics:
         metrics = [m for m in METRIC_DEFS if m in columns]
 
@@ -320,6 +315,13 @@ Examples:
         for key, (label, unit, color, group) in sorted(METRIC_DEFS.items()):
             print(f"  {key:25s} {label:15s} ({unit}) [{group}]")
         sys.exit(0)
+
+    # Check matplotlib for image output
+    if not args.draw and not HAS_MPL:
+        print("Error: matplotlib is required for image output.", file=sys.stderr)
+        print("Install it: pip install matplotlib", file=sys.stderr)
+        print("Or use --draw for terminal ASCII chart (no dependencies).", file=sys.stderr)
+        sys.exit(1)
 
     # Validate file exists
     if not args.file:
