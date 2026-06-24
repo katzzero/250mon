@@ -876,7 +876,7 @@ write_state() {
     echo "$SESSION_SAMPLE_COUNT" > "${STATE_DIR}/sample_count"
 
     # JSON state file with current/min/max per metric
-    printf '{"session":{"start":"%s","samples":%d},"gpu_freq":{"now":%s,"min":%s,"max":%s},"gpu_voltage":{"now":%s,"min":%s,"max":%s},"gpu_temp":{"now":%s,"min":%s,"max":%s},"gpu_mem_clock":{"now":%s,"min":%s,"max":%s},"gpu_power":{"now":%s,"min":%s,"max":%s},"gpu_vram_used":{"now":%s,"min":%s,"max":%s},"cpu_freq":{"now":%s,"min":%s,"max":%s},"cpu_temp":{"now":%s,"min":%s,"max":%s},"cpu_usage":{"now":%s,"min":%s,"max":%s},"nvme_temp":{"now":%s,"min":%s,"max":%s},"fan_rpm":{"now":%s,"min":%s,"max":%s}}\n' \
+    printf '{"session":{"start":"%s","samples":%d},"gpu_freq":{"current":%s,"min":%s,"max":%s},"gpu_voltage":{"current":%s,"min":%s,"max":%s},"gpu_temp":{"current":%s,"min":%s,"max":%s},"gpu_mem_clock":{"current":%s,"min":%s,"max":%s},"gpu_power":{"current":%s,"min":%s,"max":%s},"gpu_vram_used":{"current":%s,"min":%s,"max":%s},"cpu_freq":{"current":%s,"min":%s,"max":%s},"cpu_temp":{"current":%s,"min":%s,"max":%s},"cpu_usage":{"current":%s,"min":%s,"max":%s},"nvme_temp":{"current":%s,"min":%s,"max":%s},"fan_rpm":{"current":%s,"min":%s,"max":%s}}\n' \
         "$SESSION_START_TIME" \
         "$SESSION_SAMPLE_COUNT" \
         "$(json_val "${gpu_freq}" num)" \
