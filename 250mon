@@ -683,7 +683,7 @@ watch_draw() {
         line+="${D}NVMe${X} ${nvme_temp}°C "
     fi
 
-    printf '\r\033[K%s %ssample#%s' "$line" "${D}" "$sample_count"
+    printf '\r\033[K%s' "$line"
 }
 
 # --- Main loop ---
