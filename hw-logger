@@ -23,8 +23,9 @@ Options:
   -o, --output FILE   Log to file (default: ~/hwlog-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
-  --plot              Generate plot after logging (requires hw-draw)
-  --draw              Print ASCII chart after logging (requires hw-draw)
+  --live              Full-screen live dashboard (Ctrl+C to exit)
+  --plot              Generate plot after logging (default: 30 samples)
+  --draw              Print ASCII chart after logging (default: 30 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to hw-draw)
   -h, --help          Show this help message
   -v, --version       Show version
@@ -50,8 +51,9 @@ Examples:
   hw-logger --gpu -i 100 -f json         # GPU only, 100ms interval, JSON
   hw-logger --cpu -i 500 -c 60           # CPU only, 500ms, 60 samples
   hw-logger -i 2000 -o hw.csv -q         # Custom file, quiet
-  hw-logger -c 100 --draw                # Log 100 samples then show chart
-  hw-logger -c 50 --plot                 # Log 50 samples then save plot
+  hw-logger --live                       # Full-screen live dashboard
+  hw-logger --draw -c 30                 # Log 30 samples then show chart
+  hw-logger --plot -c 50                 # Log 50 samples then save plot
 EOF
 }
 
@@ -67,6 +69,7 @@ LOG_GPU=true
 LOG_CPU=true
 PLOT=false
 DRAW=false
+LIVE=false
 PLOT_METRICS=""
 
 # GPU sysfs base path
@@ -117,6 +120,10 @@ while [[ $# -gt 0 ]]; do
             DRAW=true
             shift
             ;;
+        --live)
+            LIVE=true
+            shift
+            ;;
         --plot-metrics)
             PLOT_METRICS="$2"
             shift 2
@@ -136,6 +143,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# If --draw or --plot without -c, set a default count
+if [[ ("$PLOT" == true || "$DRAW" == true) && "$COUNT" -eq 0 ]]; then
+    COUNT=30
+fi
 
 # --- Validation ---
 if [[ "$FORMAT" != "csv" && "$FORMAT" != "json" ]]; then
@@ -402,12 +414,16 @@ else
 fi
 
 cleanup() {
+    if [[ "$LIVE" == true ]]; then
+        # Restore terminal
+        printf '\033[0m\n'
+    fi
     exec 3>&- 2>/dev/null || true
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM
 
 # Write header for CSV
-if [[ "$FORMAT" == "csv" ]]; then
+if [[ "$FORMAT" == "csv" && "$LIVE" == false ]]; then
     if [[ -n "$OUTPUT" ]]; then
         emit_csv_header >&3
     fi
@@ -421,6 +437,48 @@ if [[ "$LOG_CPU" == true ]]; then
     read_cpu_usage > /dev/null
     sleep 0.05
 fi
+
+# --- Live dashboard ---
+LIVE_HISTORY=""
+live_draw() {
+    local ts="$1"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
+    local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
+    local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" nvme_temp="${13}"
+
+    # Clear screen and move cursor to top
+    printf '\033[2J\033[H'
+
+    # Header
+    printf '\033[1;36m╔══════════════════════════════════════════════════════════════╗\033[0m\n'
+    printf '\033[1;36m║\033[0m \033[1mhw-logger\033[0m live dashboard              %s \033[1;36m║\033[0m\n' "$ts"
+    printf '\033[1;36m╠══════════════════════════════════════════════════════════════╣\033[0m\n'
+
+    # GPU section
+    if [[ "$LOG_GPU" == true ]]; then
+        printf '\033[1;36m║\033[0m \033[1;31mGPU\033[0m                                                         \033[1;36m║\033[0m\n'
+        printf '\033[1;36m║\033[0m   Freq:   \033[1m%6s MHz\033[0m   Voltage: \033[1m%4s mV\033[0m                       \033[1;36m║\033[0m\n' "${gpu_freq:--}" "${gpu_volt:--}"
+        printf '\033[1;36m║\033[0m   Temp:   \033[1m%6s °C\033[0m   Power:   \033[1m%6s W\033[0m                        \033[1;36m║\033[0m\n' "${gpu_temp:--}" "${gpu_power:--}"
+        printf '\033[1;36m║\033[0m   Mem:    \033[1m%6s MHz\033[0m   VRAM:    \033[1m%s/%s MiB\033[0m                   \033[1;36m║\033[0m\n' "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
+    fi
+
+    # CPU section
+    if [[ "$LOG_CPU" == true ]]; then
+        printf '\033[1;36m║\033[0m \033[1;34mCPU\033[0m                                                         \033[1;36m║\033[0m\n'
+        printf '\033[1;36m║\033[0m   Freq:   \033[1m%6s MHz\033[0m   Usage:   \033[1m%6s %%\033[0m                        \033[1;36m║\033[0m\n' "${cpu_freq:--}" "${cpu_usage:--}"
+        printf '\033[1;36m║\033[0m   Temp:   \033[1m%6s °C\033[0m                                          \033[1;36m║\033[0m\n' "${cpu_temp:--}"
+    fi
+
+    # NVMe section
+    if [[ -n "$nvme_temp" ]]; then
+        printf '\033[1;36m║\033[0m \033[1;32mNVMe\033[0m                                                        \033[1;36m║\033[0m\n'
+        printf '\033[1;36m║\033[0m   Temp:   \033[1m%6s °C\033[0m                                          \033[1;36m║\033[0m\n' "$nvme_temp"
+    fi
+
+    printf '\033[1;36m╠══════════════════════════════════════════════════════════════╣\033[0m\n'
+    printf '\033[2m║  Ctrl+C to exit                              Sample #%-6s║\033[0m\n' "$sample_count"
+    printf '\033[1;36m╚══════════════════════════════════════════════════════════════╝\033[0m\n'
+}
 
 # --- Main loop ---
 sample_count=0
@@ -451,26 +509,32 @@ while true; do
     fi
 
     # Output
-    if [[ -n "$OUTPUT" ]]; then
-        case "$FORMAT" in
-            csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
-                          "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                          "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" >&3 ;;
-            json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
-                            "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                            "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" >&3 ;;
-        esac
-    fi
+    if [[ "$LIVE" == true ]]; then
+        live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                  "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
+    else
+        if [[ -n "$OUTPUT" ]]; then
+            case "$FORMAT" in
+                csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                              "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" >&3 ;;
+                json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                                "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" >&3 ;;
+            esac
+        fi
 
-    if [[ "$QUIET" == false ]]; then
-        case "$FORMAT" in
-            csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
-                          "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                          "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" ;;
-            json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
-                            "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                            "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" ;;
-        esac
+        if [[ "$QUIET" == false ]]; then
+            case "$FORMAT" in
+                csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                              "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" ;;
+                json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                                "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" ;;
+            esac
+        fi
     fi
 
     sample_count=$((sample_count + 1))
