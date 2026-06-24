@@ -36,9 +36,7 @@ def read_state():
 async def handler(websocket):
     connected.add(websocket)
     try:
-        # Send current state immediately
         await websocket.send(read_state())
-        # Keep connection alive, wait for messages (ping/pong handled by library)
         async for _ in websocket:
             pass
     finally:
