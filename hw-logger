@@ -25,7 +25,7 @@ Options:
   -c, --count N       Number of samples then exit (default: infinite)
   --live              Full-screen live dashboard (Ctrl+C to exit)
   --plot              Generate plot after logging (default: 30 samples)
-  --draw              Print ASCII chart after logging (default: 30 samples)
+  --draw              Print ASCII chart after logging (default: 60 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to hw-draw)
   -h, --help          Show this help message
   -v, --version       Show version
@@ -145,7 +145,9 @@ while [[ $# -gt 0 ]]; do
 done
 
 # If --draw or --plot without -c, set a default count
-if [[ ("$PLOT" == true || "$DRAW" == true) && "$COUNT" -eq 0 ]]; then
+if [[ "$DRAW" == true && "$COUNT" -eq 0 ]]; then
+    COUNT=60
+elif [[ "$PLOT" == true && "$COUNT" -eq 0 ]]; then
     COUNT=30
 fi
 
@@ -539,6 +541,12 @@ while true; do
     fi
 
     sample_count=$((sample_count + 1))
+
+    # Show countdown when --draw is active
+    if [[ "$DRAW" == true && "$QUIET" == false && "$LIVE" == false ]]; then
+        remaining=$((COUNT - sample_count))
+        printf "\r\033[2mSampling... %d remaining\033[0m " "$remaining" >&2
+    fi
 
     if [[ "$COUNT" -gt 0 && "$sample_count" -ge "$COUNT" ]]; then
         break
