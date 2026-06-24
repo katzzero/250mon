@@ -293,12 +293,12 @@ Examples:
             if m not in METRIC_DEFS:
                 print(f"Warning: Unknown metric '{m}', skipping.", file=sys.stderr)
 
-    # Set output path
+    # Set output path — default: same name as input, different extension, in home
     output = args.output
     if output:
         output = str(Path(output).with_suffix(f".{args.format}"))
     else:
-        output = os.path.expanduser(f"~/hw-plot.{args.format}")
+        output = str(Path.home() / filepath.stem).rsplit(".", 1)[0] + f".{args.format}"
 
     # Auto-title from filename
     title = args.title or f"Hardware Metrics — {filepath.stem}"
