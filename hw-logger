@@ -446,39 +446,41 @@ live_draw() {
     local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
     local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" nvme_temp="${13}"
 
-    # Clear screen and move cursor to top
     printf '\033[2J\033[H'
 
-    # Header
-    printf '\033[1;36m╔════════════════════════════════════════════════════════╗\033[0m\n'
-    printf '\033[1;36m║\033[0m \033[1mhw-logger\033[0m live dashboard            %s \033[1;36m║\033[0m\n' "$ts"
-    printf '\033[1;36m╠════════════════════════════════════════════════════════╣\033[0m\n'
+    local B="\033[1;36m"
+    local R="\033[1;31m"
+    local G="\033[1;34m"
+    local N="\033[1;32m"
+    local D="\033[2m"
+    local W="\033[1m"
+    local X="\033[0m"
 
-    # GPU section
+    printf "${B}+------ hw-logger live dashboard --------------------------------------+%s\n" "$X"
+    printf "${B}|${X} %s%-50s${B}|${X}\n" "$W" "$ts"
+    printf "${B}+-----------------------------------------------------------------------+%s\n" "$X"
+
     if [[ "$LOG_GPU" == true ]]; then
-        printf '\033[1;31mGPU\033[0m\n'
-        printf '  Freq:   \033[1m%6s MHz\033[0m   Voltage: \033[1m%4s mV\033[0m\n' "${gpu_freq:--}" "${gpu_volt:--}"
-        printf '  Temp:   \033[1m%6s °C\033[0m   Power:   \033[1m%6s W\033[0m\n' "${gpu_temp:--}" "${gpu_power:--}"
-        printf '  Mem:    \033[1m%6s MHz\033[0m   VRAM:    \033[1m%s/%s MiB\033[0m\n' "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
+        printf "${R}GPU${X}\n"
+        printf "  Freq: ${W}%6s${X} MHz   Voltage: ${W}%4s${X} mV\n" "${gpu_freq:--}" "${gpu_volt:--}"
+        printf "  Temp: ${W}%6s${X} °C   Power:   ${W}%6s${X} W\n" "${gpu_temp:--}" "${gpu_power:--}"
+        printf "  Mem:  ${W}%6s${X} MHz   VRAM:    ${W}%s/%s${X} MiB\n" "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
     fi
 
-    # CPU section
     if [[ "$LOG_CPU" == true ]]; then
-        printf '\033[1;34mCPU\033[0m\n'
-        printf '  Freq:   \033[1m%6s MHz\033[0m   Usage:   \033[1m%6s %%\033[0m\n' "${cpu_freq:--}" "${cpu_usage:--}"
-        printf '  Temp:   \033[1m%6s °C\033[0m\n' "${cpu_temp:--}"
+        printf "${G}CPU${X}\n"
+        printf "  Freq: ${W}%6s${X} MHz   Usage:   ${W}%6s${X} %%\n" "${cpu_freq:--}" "${cpu_usage:--}"
+        printf "  Temp: ${W}%6s${X} °C\n" "${cpu_temp:--}"
     fi
 
-    # NVMe section
     if [[ -n "$nvme_temp" ]]; then
-        printf '\033[1;32mNVMe\033[0m\n'
-        printf '  Temp:   \033[1m%6s °C\033[0m\n' "$nvme_temp"
+        printf "${N}NVMe${X}\n"
+        printf "  Temp: ${W}%6s${X} °C\n" "$nvme_temp"
     fi
 
-    # Footer
-    printf '\033[1;36m╠════════════════════════════════════════════════════════╣\033[0m\n'
-    printf '\033[2m║  Ctrl+C to exit                            Sample #%-5s║\033[0m\n' "$sample_count"
-    printf '\033[1;36m╚════════════════════════════════════════════════════════╝\033[0m\n'
+    printf "${B}+-----------------------------------------------------------------------+%s\n" "$X"
+    printf "${B}|${X} ${D}Ctrl+C to exit${X}                                        ${W}#%-5s${X} ${B}|${X}\n" "$sample_count"
+    printf "${B}+-----------------------------------------------------------------------+%s\n" "$X"
 }
 
 # --- Main loop ---
