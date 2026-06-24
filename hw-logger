@@ -24,6 +24,7 @@ Options:
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
   --plot              Generate plot after logging (requires hw-draw)
+  --draw              Print ASCII chart after logging (requires hw-draw)
   --plot-metrics M    Metrics to plot (comma-separated, passed to hw-draw)
   -h, --help          Show this help message
   -v, --version       Show version
@@ -49,7 +50,8 @@ Examples:
   hw-logger --gpu -i 100 -f json         # GPU only, 100ms interval, JSON
   hw-logger --cpu -i 500 -c 60           # CPU only, 500ms, 60 samples
   hw-logger -i 2000 -o hw.csv -q         # Custom file, quiet
-  hw-logger -c 100 --plot                # Log 100 samples then plot
+  hw-logger -c 100 --draw                # Log 100 samples then show chart
+  hw-logger -c 50 --plot                 # Log 50 samples then save plot
 EOF
 }
 
@@ -64,6 +66,7 @@ COUNT=0
 LOG_GPU=true
 LOG_CPU=true
 PLOT=false
+DRAW=false
 PLOT_METRICS=""
 
 # GPU sysfs base path
@@ -108,6 +111,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --plot)
             PLOT=true
+            shift
+            ;;
+        --draw)
+            DRAW=true
             shift
             ;;
         --plot-metrics)
@@ -476,9 +483,8 @@ while true; do
 done
 
 # --- Plot after logging ---
-if [[ "$PLOT" == true ]]; then
+if [[ "$PLOT" == true || "$DRAW" == true ]]; then
     HW_DRAW=""
-    # Find hw-draw: same directory as hw-logger, or PATH
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [[ -x "${SCRIPT_DIR}/hw-draw" ]]; then
         HW_DRAW="${SCRIPT_DIR}/hw-draw"
@@ -489,10 +495,12 @@ if [[ "$PLOT" == true ]]; then
     if [[ -z "$HW_DRAW" ]]; then
         echo "Warning: hw-draw not found, skipping plot." >&2
     else
-        echo "Generating plot..." >&2
         _plot_args=("$OUTPUT")
         if [[ -n "$PLOT_METRICS" ]]; then
             _plot_args+=(-m "$PLOT_METRICS")
+        fi
+        if [[ "$DRAW" == true ]]; then
+            _plot_args+=(--draw)
         fi
         "$HW_DRAW" "${_plot_args[@]}"
     fi

@@ -46,6 +46,9 @@ GROUP_COLORS = {
     "storage": "#1abc9c",
 }
 
+# Unicode block characters for CLI plot (low to high)
+BLOCKS = " ▁▂▃▄▅▆▇█"
+
 
 def read_csv(filepath):
     """Read CSV file, return (timestamps, {column: [values]})"""
@@ -146,6 +149,61 @@ def setup_plot_style():
         'axes.titlesize': 11,
         'axes.labelsize': 10,
     })
+
+
+def cli_plot(timestamps, columns, metrics, width):
+    """Render ASCII chart in the terminal."""
+    if not metrics:
+        metrics = [m for m in METRIC_DEFS if m in columns]
+
+    valid_metrics = []
+    for m in metrics:
+        if m in columns and any(v is not None for v in columns[m]):
+            valid_metrics.append(m)
+
+    if not valid_metrics:
+        print("Error: No plottable metrics found.", file=sys.stderr)
+        sys.exit(1)
+
+    # Reserve space: label width + chart width
+    label_w = 16
+    chart_w = max(20, width - label_w - 10)
+
+    for metric in valid_metrics:
+        meta = METRIC_DEFS.get(metric, (metric, "", "—"))
+        label, unit, _color, _group = meta
+
+        values = columns[metric]
+        valid_vals = [v for v in values if v is not None]
+
+        if not valid_vals:
+            continue
+
+        vmin = min(valid_vals)
+        vmax = max(valid_vals)
+        vrange = vmax - vmin if vmax != vmin else 1
+
+        # Downsample to chart_w if more points
+        if len(valid_vals) > chart_w:
+            step = len(valid_vals) / chart_w
+            sampled = [valid_vals[int(i * step)] for i in range(chart_w)]
+        else:
+            sampled = valid_vals
+
+        # Map to block characters
+        blocks = ""
+        for v in sampled:
+            idx = int((v - vmin) / vrange * (len(BLOCKS) - 1))
+            idx = max(0, min(idx, len(BLOCKS) - 1))
+            blocks += BLOCKS[idx]
+
+        # Print label + chart
+        last = valid_vals[-1]
+        header = f"{label:15s} │"
+        footer = f"{'':15s} │{vmin:.0f}{'':>{chart_w - len(f'{vmin:.0f}') - len(f'{vmax:.0f}')}}{vmax:.0f}"
+        print(f"\033[1m{header}\033[0m{blocks}")
+        print(f"\033[2m{footer}\033[0m")
+        print(f"{'':15s}  last: \033[1m{last:.1f} {unit}\033[0m")
 
 
 def plot_metrics(timestamps, columns, metrics, title, output, width, height, dpi, show_grid):
@@ -250,6 +308,7 @@ Examples:
     parser.add_argument("-H", "--height", type=int, default=600, help="Image height in px (default: 600)")
     parser.add_argument("--dpi", type=int, default=100, help="Image DPI (default: 100)")
     parser.add_argument("--grid", action="store_true", help="Show grid lines")
+    parser.add_argument("--draw", action="store_true", help="Print ASCII chart to terminal (no image)")
     parser.add_argument("--list-metrics", action="store_true", help="List available metrics and exit")
     parser.add_argument("-v", "--version", action="version", version=f"hw-draw v{VERSION}")
 
@@ -303,8 +362,11 @@ Examples:
     # Auto-title from filename
     title = args.title or f"Hardware Metrics — {filepath.stem}"
 
-    plot_metrics(timestamps, columns, metrics, title, output,
-                 args.width, args.height, args.dpi, args.grid)
+    if args.draw:
+        cli_plot(timestamps, columns, metrics, args.width)
+    else:
+        plot_metrics(timestamps, columns, metrics, title, output,
+                     args.width, args.height, args.dpi, args.grid)
 
 
 if __name__ == "__main__":
