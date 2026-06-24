@@ -549,6 +549,7 @@ live_draw() {
     fi
 
     printf '%0.s-' {1..60}
+    echo
     printf "  ${D}Ctrl+C to exit${X}  ${W}sample #%-5s${X}\n" "$sample_count"
 }
 
