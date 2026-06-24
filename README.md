@@ -84,7 +84,9 @@ Info:
 | `cpu_freq_mhz` | Average CPU frequency (MHz) | `/proc/cpuinfo` |
 | `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
 | `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
+| `cpu_power_w` | CPU power draw (W) | RAPL or k10temp (null if unavailable) |
 | `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
+| `fan_rpm` | Fan speed (RPM) | hwmon (null if unavailable) |
 
 ## Examples
 
