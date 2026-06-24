@@ -1,4 +1,4 @@
-# hw-logger Roadmap
+# 250mon Roadmap
 
 ## v0.1.0 — Current
 
@@ -6,14 +6,14 @@
 - [x] CPU metrics: freq, temp, usage
 - [x] CSV and JSON output formats
 - [x] Configurable interval (ms)
-- [x] Output to file (default: `~/hwlog-YYYYMMDD-HHMMSS.<ext>`)
+- [x] Output to file (default: `~/250mon-YYYYMMDD-HHMMSS.<ext>`)
 - [x] Component selection (`--gpu`, `--cpu`)
 - [x] Quiet mode (`-q`)
 - [x] Sample count limit (`-c`)
 - [x] GPU power draw (watts)
 - [x] VRAM usage (used/total in MiB)
 - [x] NVMe temperature
-- [x] hw-draw: Plotting tool (matplotlib, CSV/JSONL → PNG/SVG/PDF)
+- [x] 250mon-draw: Plotting tool (matplotlib, CSV/JSONL → PNG/SVG/PDF)
 - [x] `--plot` flag: Auto-generate plot after logging
 
 ---
@@ -22,7 +22,7 @@
 
 - [ ] `--max-size SIZE` — Rotate log file at size limit (e.g., `10M`, `500K`)
 - [ ] `--rotate N` — Keep max N rotated files
-- [ ] Config file: `~/.config/hw-logger/config.toml`
+- [ ] Config file: `~/.config/250mon/config.toml`
 
 ## v0.3.0 — Enhancements
 

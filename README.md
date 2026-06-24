@@ -1,4 +1,4 @@
-# hw-logger
+# 250mon
 
 Lightweight bash logger for AMD Cyan Skillfish (BC-250) GPU and CPU metrics.
 
@@ -15,7 +15,7 @@ No external packages required.
 ## Usage
 
 ```
-hw-logger [OPTIONS]
+250mon [OPTIONS]
 
 Component selection (default: both GPU and CPU):
   --gpu               Log GPU metrics only
@@ -24,7 +24,7 @@ Component selection (default: both GPU and CPU):
 Options:
   -i, --interval MS   Sampling interval in milliseconds (default: 1000)
   -f, --format FMT    Output format: csv or json (default: csv)
-  -o, --output FILE   Log to file (default: ~/hwlog-YYYYMMDD-HHMMSS.<ext>)
+  -o, --output FILE   Log to file (default: ~/250mon-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
   -h, --help          Show help message
@@ -54,17 +54,17 @@ Options:
 ## Examples
 
 ```bash
-# Log to ~/hwlog-YYYYMMDD-HHMMSS.csv
-hw-logger
+# Log to ~/250mon-YYYYMMDD-HHMMSS.csv
+250mon
 
-# GPU only, 100ms interval, JSON (saves to ~/hwlog-YYYYMMDD-HHMMSS.jsonl)
-hw-logger --gpu -i 100 -f json
+# GPU only, 100ms interval, JSON (saves to ~/250mon-YYYYMMDD-HHMMSS.jsonl)
+250mon --gpu -i 100 -f json
 
 # CPU only, 500ms, 60 samples
-hw-logger --cpu -i 500 -c 60
+250mon --cpu -i 500 -c 60
 
 # Custom output file, quiet
-hw-logger -i 2000 -o hw.csv -q
+250mon -i 2000 -o hw.csv -q
 ```
 
 ## CSV Output
@@ -85,8 +85,8 @@ timestamp,gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_load_pct,gpu_mem_clock_mhz,
 ## Install
 
 ```bash
-sudo cp hw-logger /usr/local/bin/
-sudo chmod +x /usr/local/bin/hw-logger
+sudo cp 250mon /usr/local/bin/
+sudo chmod +x /usr/local/bin/250mon
 ```
 
 ## License
