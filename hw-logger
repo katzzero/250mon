@@ -450,34 +450,35 @@ live_draw() {
     printf '\033[2J\033[H'
 
     # Header
-    printf '\033[1;36m╔══════════════════════════════════════════════════════════════╗\033[0m\n'
-    printf '\033[1;36m║\033[0m \033[1mhw-logger\033[0m live dashboard              %s \033[1;36m║\033[0m\n' "$ts"
-    printf '\033[1;36m╠══════════════════════════════════════════════════════════════╣\033[0m\n'
+    printf '\033[1;36m╔════════════════════════════════════════════════════════╗\033[0m\n'
+    printf '\033[1;36m║\033[0m \033[1mhw-logger\033[0m live dashboard            %s \033[1;36m║\033[0m\n' "$ts"
+    printf '\033[1;36m╠════════════════════════════════════════════════════════╣\033[0m\n'
 
     # GPU section
     if [[ "$LOG_GPU" == true ]]; then
-        printf '\033[1;36m║\033[0m \033[1;31mGPU\033[0m                                                         \033[1;36m║\033[0m\n'
-        printf '\033[1;36m║\033[0m   Freq:   \033[1m%6s MHz\033[0m   Voltage: \033[1m%4s mV\033[0m                       \033[1;36m║\033[0m\n' "${gpu_freq:--}" "${gpu_volt:--}"
-        printf '\033[1;36m║\033[0m   Temp:   \033[1m%6s °C\033[0m   Power:   \033[1m%6s W\033[0m                        \033[1;36m║\033[0m\n' "${gpu_temp:--}" "${gpu_power:--}"
-        printf '\033[1;36m║\033[0m   Mem:    \033[1m%6s MHz\033[0m   VRAM:    \033[1m%s/%s MiB\033[0m                   \033[1;36m║\033[0m\n' "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
+        printf '\033[1;31mGPU\033[0m\n'
+        printf '  Freq:   \033[1m%6s MHz\033[0m   Voltage: \033[1m%4s mV\033[0m\n' "${gpu_freq:--}" "${gpu_volt:--}"
+        printf '  Temp:   \033[1m%6s °C\033[0m   Power:   \033[1m%6s W\033[0m\n' "${gpu_temp:--}" "${gpu_power:--}"
+        printf '  Mem:    \033[1m%6s MHz\033[0m   VRAM:    \033[1m%s/%s MiB\033[0m\n' "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
     fi
 
     # CPU section
     if [[ "$LOG_CPU" == true ]]; then
-        printf '\033[1;36m║\033[0m \033[1;34mCPU\033[0m                                                         \033[1;36m║\033[0m\n'
-        printf '\033[1;36m║\033[0m   Freq:   \033[1m%6s MHz\033[0m   Usage:   \033[1m%6s %%\033[0m                        \033[1;36m║\033[0m\n' "${cpu_freq:--}" "${cpu_usage:--}"
-        printf '\033[1;36m║\033[0m   Temp:   \033[1m%6s °C\033[0m                                          \033[1;36m║\033[0m\n' "${cpu_temp:--}"
+        printf '\033[1;34mCPU\033[0m\n'
+        printf '  Freq:   \033[1m%6s MHz\033[0m   Usage:   \033[1m%6s %%\033[0m\n' "${cpu_freq:--}" "${cpu_usage:--}"
+        printf '  Temp:   \033[1m%6s °C\033[0m\n' "${cpu_temp:--}"
     fi
 
     # NVMe section
     if [[ -n "$nvme_temp" ]]; then
-        printf '\033[1;36m║\033[0m \033[1;32mNVMe\033[0m                                                        \033[1;36m║\033[0m\n'
-        printf '\033[1;36m║\033[0m   Temp:   \033[1m%6s °C\033[0m                                          \033[1;36m║\033[0m\n' "$nvme_temp"
+        printf '\033[1;32mNVMe\033[0m\n'
+        printf '  Temp:   \033[1m%6s °C\033[0m\n' "$nvme_temp"
     fi
 
-    printf '\033[1;36m╠══════════════════════════════════════════════════════════════╣\033[0m\n'
-    printf '\033[2m║  Ctrl+C to exit                              Sample #%-6s║\033[0m\n' "$sample_count"
-    printf '\033[1;36m╚══════════════════════════════════════════════════════════════╝\033[0m\n'
+    # Footer
+    printf '\033[1;36m╠════════════════════════════════════════════════════════╣\033[0m\n'
+    printf '\033[2m║  Ctrl+C to exit                            Sample #%-5s║\033[0m\n' "$sample_count"
+    printf '\033[1;36m╚════════════════════════════════════════════════════════╝\033[0m\n'
 }
 
 # --- Main loop ---
