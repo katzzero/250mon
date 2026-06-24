@@ -27,6 +27,8 @@ Options:
   -o, --output FILE   Log to file (default: ~/250mon-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
+  --max-size SIZE     Rotate log at size limit (e.g., 10M, 500K, 1G)
+  --rotate N          Keep max N rotated files (default: 5)
   -h, --help          Show help message
   -v, --version       Show version
 ```
@@ -65,6 +67,9 @@ Options:
 
 # Custom output file, quiet
 250mon -i 2000 -o hw.csv -q
+
+# Rotate logs at 10MB, keep 3 backups
+250mon --max-size 10M --rotate 3
 ```
 
 ## CSV Output
@@ -88,6 +93,21 @@ timestamp,gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_load_pct,gpu_mem_clock_mhz,
 sudo cp 250mon /usr/local/bin/
 sudo chmod +x /usr/local/bin/250mon
 ```
+
+## Config File
+
+Create `~/.config/250mon/config.toml` to set defaults:
+
+```toml
+interval = 1000
+format = "csv"
+gpu = true
+cpu = true
+max_size = "50M"
+rotate = 5
+```
+
+CLI flags override config file values.
 
 ## License
 

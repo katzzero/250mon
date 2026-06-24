@@ -23,6 +23,8 @@ Options:
   -o, --output FILE   Log to file (default: ~/250mon-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
+  --max-size SIZE     Rotate log at size limit (e.g., 10M, 500K, 1G)
+  --rotate N          Keep max N rotated files (default: 5)
   --live              Full-screen live dashboard (Ctrl+C to exit)
   --spark             Show sparklines in live dashboard
   --plot              Generate plot after logging (default: 30 samples)
@@ -55,6 +57,15 @@ Examples:
   250mon --live                       # Full-screen live dashboard
   250mon --draw -c 30                 # Log 30 samples then show chart
   250mon --plot -c 50                 # Log 50 samples then save plot
+  250mon --max-size 10M --rotate 3    # Rotate at 10MB, keep 3 files
+
+Config file: ~/.config/250mon/config.toml
+  interval = 1000
+  format = "csv"
+  gpu = true
+  cpu = true
+  max_size = "50M"
+  rotate = 5
 EOF
 }
 
@@ -73,6 +84,9 @@ DRAW=false
 LIVE=false
 SPARK=false
 PLOT_METRICS=""
+MAX_SIZE=""
+ROTATE=5
+CONFIG_FILE="${HOME}/.config/250mon/config.toml"
 
 # GPU sysfs base path
 GPU_PATH=""
@@ -80,6 +94,29 @@ GPU_PATH=""
 # Previous CPU stat for usage calculation
 PREV_CPU_TOTAL=0
 PREV_CPU_IDLE=0
+
+# --- Load config file ---
+load_config() {
+    local cfg="$CONFIG_FILE"
+    [[ ! -f "$cfg" ]] && return
+    while IFS='=' read -r key val; do
+        key=$(echo "$key" | xargs)
+        val=$(echo "$val" | xargs | sed 's/^"//;s/"$//')
+        [[ -z "$key" || "$key" == \#* ]] && continue
+        case "$key" in
+            interval)    INTERVAL_MS="$val" ;;
+            format)      FORMAT="$val" ;;
+            output)      OUTPUT="$val" ;;
+            quiet)       QUIET="$val" ;;
+            gpu)         [[ "$val" == "true" ]] && LOG_GPU=true; [[ "$val" == "false" ]] && LOG_GPU=false ;;
+            cpu)         [[ "$val" == "true" ]] && LOG_CPU=true; [[ "$val" == "false" ]] && LOG_CPU=false ;;
+            max_size)    MAX_SIZE="$val" ;;
+            rotate)      ROTATE="$val" ;;
+        esac
+    done < "$cfg"
+}
+
+load_config
 
 # --- Argument parsing ---
 while [[ $# -gt 0 ]]; do
@@ -134,6 +171,14 @@ while [[ $# -gt 0 ]]; do
             PLOT_METRICS="$2"
             shift 2
             ;;
+        --max-size)
+            MAX_SIZE="$2"
+            shift 2
+            ;;
+        --rotate)
+            ROTATE="$2"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -167,6 +212,61 @@ if ! [[ "$INTERVAL_MS" =~ ^[0-9]+$ ]] || [[ "$INTERVAL_MS" -lt 1 ]]; then
     echo "Error: Interval must be a positive integer (ms)." >&2
     exit 1
 fi
+
+# --- Parse size string (e.g., 10M -> bytes) ---
+parse_size() {
+    local s="$1"
+    local num unit
+    num=$(echo "$s" | sed 's/[^0-9.]//g')
+    unit=$(echo "$s" | sed 's/[0-9.]//g' | tr '[:lower:]' '[:upper:]')
+    case "$unit" in
+        K)  awk "BEGIN {printf \"%.0f\", $num * 1024}" ;;
+        M)  awk "BEGIN {printf \"%.0f\", $num * 1048576}" ;;
+        G)  awk "BEGIN {printf \"%.0f\", $num * 1073741824}" ;;
+        "") awk "BEGIN {printf \"%.0f\", $num}" ;;
+        *)  echo "0" ;;
+    esac
+}
+
+# --- Log rotation ---
+rotate_log() {
+    [[ -z "$OUTPUT" || ! -f "$OUTPUT" ]] && return
+    [[ -z "$MAX_SIZE" ]] && return
+
+    local max_bytes
+    max_bytes=$(parse_size "$MAX_SIZE")
+    local file_size
+    file_size=$(stat -c%s "$OUTPUT" 2>/dev/null || echo 0)
+
+    [[ "$file_size" -lt "$max_bytes" ]] && return
+
+    # Close fd 3 before rotating
+    exec 3>&- 2>/dev/null || true
+
+    # Remove oldest
+    local last="${OUTPUT}.${ROTATE}"
+    [[ -f "$last" ]] && rm -f "$last"
+
+    # Shift: .N-1 -> .N, ..., .1 -> .2
+    local i=$((ROTATE - 1))
+    while [[ $i -ge 1 ]]; do
+        local src="${OUTPUT}.${i}"
+        local dst="${OUTPUT}.$((i + 1))"
+        [[ -f "$src" ]] && mv "$src" "$dst"
+        i=$((i - 1))
+    done
+
+    # Current -> .1
+    mv "$OUTPUT" "${OUTPUT}.1"
+
+    # Reopen fd 3
+    exec 3>"$OUTPUT"
+
+    # Rewrite CSV header
+    if [[ "$FORMAT" == "csv" ]]; then
+        emit_csv_header >&3
+    fi
+}
 
 # --- Default output path ---
 if [[ -z "$OUTPUT" ]]; then
@@ -622,6 +722,9 @@ while true; do
     fi
 
     sample_count=$((sample_count + 1))
+
+    # Rotate log if needed
+    rotate_log
 
     # Show countdown when --draw is active
     if [[ "$DRAW" == true && "$QUIET" == false && "$LIVE" == false ]]; then

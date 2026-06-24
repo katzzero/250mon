@@ -20,9 +20,9 @@
 
 ## v0.2.0 — Next
 
-- [ ] `--max-size SIZE` — Rotate log file at size limit (e.g., `10M`, `500K`)
-- [ ] `--rotate N` — Keep max N rotated files
-- [ ] Config file: `~/.config/250mon/config.toml`
+- [x] `--max-size SIZE` — Rotate log file at size limit (e.g., `10M`, `500K`)
+- [x] `--rotate N` — Keep max N rotated files
+- [x] Config file: `~/.config/250mon/config.toml`
 
 ## v0.3.0 — Enhancements
 
