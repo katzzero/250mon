@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""
+hw-draw - Plot hardware metrics from hw-logger CSV/JSONL files.
+
+Generates multi-panel charts from hw-logger log files.
+"""
+
+import argparse
+import csv
+import json
+import sys
+import os
+from datetime import datetime
+from pathlib import Path
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')  # Non-interactive backend
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    HAS_MPL = True
+except ImportError:
+    HAS_MPL = False
+
+VERSION = "0.1.0"
+
+# Metric definitions: (column_name, label, unit, color, group)
+METRIC_DEFS = {
+    "gpu_freq_mhz":       ("GPU Freq", "MHz", "#e74c3c", "gpu"),
+    "gpu_voltage_mv":     ("GPU Voltage", "mV", "#e67e22", "gpu"),
+    "gpu_temp_c":         ("GPU Temp", "°C", "#e74c3c", "gpu"),
+    "gpu_load_pct":       ("GPU Load", "%", "#f39c12", "gpu"),
+    "gpu_mem_clock_mhz":  ("Mem Clock", "MHz", "#9b59b6", "gpu"),
+    "gpu_power_w":        ("GPU Power", "W", "#e74c3c", "gpu"),
+    "gpu_vram_used_mib":  ("VRAM Used", "MiB", "#3498db", "gpu"),
+    "gpu_vram_total_mib": ("VRAM Total", "MiB", "#2ecc71", "gpu"),
+    "cpu_freq_mhz":       ("CPU Freq", "MHz", "#3498db", "cpu"),
+    "cpu_temp_c":         ("CPU Temp", "°C", "#3498db", "cpu"),
+    "cpu_usage_pct":      ("CPU Usage", "%", "#2ecc71", "cpu"),
+    "nvme_temp_c":        ("NVMe Temp", "°C", "#1abc9c", "storage"),
+}
+
+GROUP_COLORS = {
+    "gpu":     "#e74c3c",
+    "cpu":     "#3498db",
+    "storage": "#1abc9c",
+}
+
+
+def read_csv(filepath):
+    """Read CSV file, return (timestamps, {column: [values]})"""
+    timestamps = []
+    columns = {}
+
+    with open(filepath, 'r') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            ts_str = row.get("timestamp", "")
+            try:
+                # Handle timezone offset format like 2026-06-24T07:50:39-0300
+                ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S%z")
+            except ValueError:
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    continue
+
+            timestamps.append(ts)
+
+            for key, val in row.items():
+                if key == "timestamp":
+                    continue
+                if key not in columns:
+                    columns[key] = []
+                try:
+                    columns[key].append(float(val) if val and val != "null" else None)
+                except ValueError:
+                    columns[key].append(None)
+
+    return timestamps, columns
+
+
+def read_jsonl(filepath):
+    """Read JSONL file, return (timestamps, {column: [values]})"""
+    timestamps = []
+    columns = {}
+
+    with open(filepath, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            ts_str = row.get("timestamp", "")
+            try:
+                ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S%z")
+            except ValueError:
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%S")
+                except ValueError:
+                    continue
+
+            timestamps.append(ts)
+
+            for key, val in row.items():
+                if key == "timestamp":
+                    continue
+                if key not in columns:
+                    columns[key] = []
+                if val is None or val == "null":
+                    columns[key].append(None)
+                else:
+                    try:
+                        columns[key].append(float(val))
+                    except (ValueError, TypeError):
+                        columns[key].append(None)
+
+    return timestamps, columns
+
+
+def setup_plot_style():
+    """Configure matplotlib plot style."""
+    try:
+        plt.style.use('seaborn-v0_8-darkgrid')
+    except OSError:
+        try:
+            plt.style.use('seaborn-darkgrid')
+        except OSError:
+            pass
+
+    plt.rcParams.update({
+        'figure.facecolor': '#1a1a2e',
+        'axes.facecolor': '#16213e',
+        'axes.edgecolor': '#444',
+        'axes.labelcolor': '#eee',
+        'text.color': '#eee',
+        'xtick.color': '#aaa',
+        'ytick.color': '#aaa',
+        'grid.color': '#333',
+        'grid.alpha': 0.5,
+        'font.size': 10,
+        'axes.titlesize': 11,
+        'axes.labelsize': 10,
+    })
+
+
+def plot_metrics(timestamps, columns, metrics, title, output, width, height, dpi, show_grid):
+    """Create multi-panel plot of selected metrics."""
+    if not HAS_MPL:
+        print("Error: matplotlib is required for plotting.", file=sys.stderr)
+        print("Install it: pip install matplotlib", file=sys.stderr)
+        sys.exit(1)
+
+    if not metrics:
+        metrics = [m for m in METRIC_DEFS if m in columns]
+
+    if not metrics:
+        print("Error: No plottable metrics found in file.", file=sys.stderr)
+        sys.exit(1)
+
+    # Filter out metrics with no data
+    valid_metrics = []
+    for m in metrics:
+        if m in columns and any(v is not None for v in columns[m]):
+            valid_metrics.append(m)
+
+    if not valid_metrics:
+        print("Error: All selected metrics are empty.", file=sys.stderr)
+        sys.exit(1)
+
+    setup_plot_style()
+
+    n = len(valid_metrics)
+    fig, axes = plt.subplots(n, 1, figsize=(width / dpi, height / dpi), dpi=dpi, squeeze=False)
+    axes = axes.flatten()
+
+    fig.suptitle(title or "Hardware Metrics", fontsize=14, fontweight='bold', y=0.98)
+
+    for i, metric in enumerate(valid_metrics):
+        ax = axes[i]
+        meta = METRIC_DEFS.get(metric, (metric, "", "#aaa", "other"))
+        label, unit, color, group = meta
+
+        values = columns[metric]
+        # Filter None values for plotting
+        valid_ts = [t for t, v in zip(timestamps, values) if v is not None]
+        valid_vals = [v for v in values if v is not None]
+
+        if not valid_vals:
+            ax.set_visible(False)
+            continue
+
+        ax.plot(valid_ts, valid_vals, color=color, linewidth=1.5, alpha=0.9)
+        ax.fill_between(valid_ts, valid_vals, alpha=0.15, color=color)
+
+        ax.set_ylabel(f"{label}\n({unit})", fontsize=9)
+        ax.tick_params(axis='x', rotation=30, labelsize=8)
+        ax.tick_params(axis='y', labelsize=8)
+
+        if show_grid:
+            ax.grid(True, alpha=0.3)
+
+        # Format x-axis dates
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+        fig.autofmt_xdate(rotation=30)
+
+    # Remove empty subplots
+    for i in range(len(valid_metrics), len(axes)):
+        fig.delaxes(axes[i])
+
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+
+    if output:
+        fig.savefig(output, dpi=dpi, bbox_inches='tight',
+                    facecolor=fig.get_facecolor(), edgecolor='none')
+        print(f"Saved: {output}")
+    else:
+        # Save to temp and show path
+        default_out = os.path.expanduser("~/hw-plot.png")
+        fig.savefig(default_out, dpi=dpi, bbox_inches='tight',
+                    facecolor=fig.get_facecolor(), edgecolor='none')
+        print(f"Saved: {default_out}")
+
+    plt.close(fig)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="hw-draw - Plot hardware metrics from hw-logger log files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  hw-draw ~/hwlog-20260624-074520.csv
+  hw-draw log.csv -o plot.png
+  hw-draw log.csv -m gpu_temp_c,cpu_temp_c --title "Temps"
+  hw-draw log.jsonl -m gpu_power_w,cpu_usage_pct -w 1600 -h 800
+        """
+    )
+    parser.add_argument("file", nargs="?", help="CSV or JSONL log file from hw-logger")
+    parser.add_argument("-o", "--output", help="Save plot to file (default: ~/hw-plot.png)")
+    parser.add_argument("-f", "--format", choices=["png", "svg", "pdf"], default="png",
+                        help="Output format (default: png)")
+    parser.add_argument("-m", "--metrics", help="Comma-separated metrics to plot (default: all)")
+    parser.add_argument("--title", help="Plot title")
+    parser.add_argument("-w", "--width", type=int, default=1200, help="Image width in px (default: 1200)")
+    parser.add_argument("-H", "--height", type=int, default=600, help="Image height in px (default: 600)")
+    parser.add_argument("--dpi", type=int, default=100, help="Image DPI (default: 100)")
+    parser.add_argument("--grid", action="store_true", help="Show grid lines")
+    parser.add_argument("--list-metrics", action="store_true", help="List available metrics and exit")
+    parser.add_argument("-v", "--version", action="version", version=f"hw-draw v{VERSION}")
+
+    args = parser.parse_args()
+
+    # List metrics mode
+    if args.list_metrics:
+        print("Available metrics:")
+        for key, (label, unit, color, group) in sorted(METRIC_DEFS.items()):
+            print(f"  {key:25s} {label:15s} ({unit}) [{group}]")
+        sys.exit(0)
+
+    # Validate file exists
+    if not args.file:
+        parser.error("the following arguments are required: file")
+
+    filepath = Path(args.file)
+    if not filepath.exists():
+        print(f"Error: File not found: {filepath}", file=sys.stderr)
+        sys.exit(1)
+
+    # Read data
+    ext = filepath.suffix.lower()
+    if ext == ".jsonl" or ext == ".json":
+        timestamps, columns = read_jsonl(filepath)
+    else:
+        timestamps, columns = read_csv(filepath)
+
+    if not timestamps:
+        print("Error: No data found in file.", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Read {len(timestamps)} samples, {len(columns)} metrics")
+
+    # Parse requested metrics
+    metrics = None
+    if args.metrics:
+        metrics = [m.strip() for m in args.metrics.split(",")]
+        # Validate
+        for m in metrics:
+            if m not in METRIC_DEFS:
+                print(f"Warning: Unknown metric '{m}', skipping.", file=sys.stderr)
+
+    # Set output path
+    output = args.output
+    if output:
+        output = str(Path(output).with_suffix(f".{args.format}"))
+    else:
+        output = os.path.expanduser(f"~/hw-plot.{args.format}")
+
+    # Auto-title from filename
+    title = args.title or f"Hardware Metrics — {filepath.stem}"
+
+    plot_metrics(timestamps, columns, metrics, title, output,
+                 args.width, args.height, args.dpi, args.grid)
+
+
+if __name__ == "__main__":
+    main()

@@ -13,6 +13,8 @@
 - [x] GPU power draw (watts)
 - [x] VRAM usage (used/total in MiB)
 - [x] NVMe temperature
+- [x] hw-draw: Plotting tool (matplotlib, CSV/JSONL → PNG/SVG/PDF)
+- [x] `--plot` flag: Auto-generate plot after logging
 
 ---
 

@@ -23,6 +23,8 @@ Options:
   -o, --output FILE   Log to file (default: ~/hwlog-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
+  --plot              Generate plot after logging (requires hw-draw)
+  --plot-metrics M    Metrics to plot (comma-separated, passed to hw-draw)
   -h, --help          Show this help message
   -v, --version       Show version
 
@@ -47,6 +49,7 @@ Examples:
   hw-logger --gpu -i 100 -f json         # GPU only, 100ms interval, JSON
   hw-logger --cpu -i 500 -c 60           # CPU only, 500ms, 60 samples
   hw-logger -i 2000 -o hw.csv -q         # Custom file, quiet
+  hw-logger -c 100 --plot                # Log 100 samples then plot
 EOF
 }
 
@@ -60,6 +63,8 @@ QUIET=false
 COUNT=0
 LOG_GPU=true
 LOG_CPU=true
+PLOT=false
+PLOT_METRICS=""
 
 # GPU sysfs base path
 GPU_PATH=""
@@ -99,6 +104,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--count)
             COUNT="$2"
+            shift 2
+            ;;
+        --plot)
+            PLOT=true
+            shift
+            ;;
+        --plot-metrics)
+            PLOT_METRICS="$2"
             shift 2
             ;;
         -h|--help)
@@ -461,3 +474,26 @@ while true; do
 
     sleep "$INTERVAL_SEC"
 done
+
+# --- Plot after logging ---
+if [[ "$PLOT" == true ]]; then
+    HW_DRAW=""
+    # Find hw-draw: same directory as hw-logger, or PATH
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -x "${SCRIPT_DIR}/hw-draw" ]]; then
+        HW_DRAW="${SCRIPT_DIR}/hw-draw"
+    elif command -v hw-draw &>/dev/null; then
+        HW_DRAW="hw-draw"
+    fi
+
+    if [[ -z "$HW_DRAW" ]]; then
+        echo "Warning: hw-draw not found, skipping plot." >&2
+    else
+        echo "Generating plot..." >&2
+        _plot_args=("$OUTPUT")
+        if [[ -n "$PLOT_METRICS" ]]; then
+            _plot_args+=(-m "$PLOT_METRICS")
+        fi
+        "$HW_DRAW" "${_plot_args[@]}"
+    fi
+fi
