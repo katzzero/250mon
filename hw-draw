@@ -165,12 +165,14 @@ def cli_plot(timestamps, columns, metrics, width):
         print("Error: No plottable metrics found.", file=sys.stderr)
         sys.exit(1)
 
-    # Auto-detect terminal width
-    try:
-        term_w = os.get_terminal_size().columns
-    except OSError:
-        term_w = 80
-    chart_w = max(20, term_w - 30)
+    # Width: auto-detect terminal if not specified
+    if width:
+        chart_w = width
+    else:
+        try:
+            chart_w = max(20, os.get_terminal_size().columns - 30)
+        except OSError:
+            chart_w = 50
 
     for metric in valid_metrics:
         meta = METRIC_DEFS.get(metric, (metric, "", "—"))
@@ -302,7 +304,7 @@ Examples:
                         help="Output format (default: png)")
     parser.add_argument("-m", "--metrics", help="Comma-separated metrics to plot (default: all)")
     parser.add_argument("--title", help="Plot title")
-    parser.add_argument("-w", "--width", type=int, default=1200, help="Image width in px (default: 1200)")
+    parser.add_argument("-w", "--width", type=int, default=None, help="ASCII chart width in columns (default: auto-detect terminal)")
     parser.add_argument("-H", "--height", type=int, default=600, help="Image height in px (default: 600)")
     parser.add_argument("--dpi", type=int, default=100, help="Image DPI (default: 100)")
     parser.add_argument("--grid", action="store_true", help="Show grid lines")
