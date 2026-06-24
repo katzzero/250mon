@@ -165,14 +165,13 @@ def cli_plot(timestamps, columns, metrics, width):
         print("Error: No plottable metrics found.", file=sys.stderr)
         sys.exit(1)
 
-    # Width: auto-detect terminal if not specified
-    if width:
-        chart_w = width
-    else:
-        try:
-            chart_w = max(20, os.get_terminal_size().columns - 30)
-        except OSError:
-            chart_w = 50
+    # Width: samples count, capped at terminal width
+    try:
+        term_w = os.get_terminal_size().columns
+    except OSError:
+        term_w = 80
+    total_samples = len(timestamps)
+    chart_w = min(total_samples, term_w - 30)
 
     for metric in valid_metrics:
         meta = METRIC_DEFS.get(metric, (metric, "", "—"))
