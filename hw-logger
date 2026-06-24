@@ -24,6 +24,7 @@ Options:
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
   --live              Full-screen live dashboard (Ctrl+C to exit)
+  --spark             Show sparklines in live dashboard
   --plot              Generate plot after logging (default: 30 samples)
   --draw              Print ASCII chart after logging (default: 60 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to hw-draw)
@@ -70,6 +71,7 @@ LOG_CPU=true
 PLOT=false
 DRAW=false
 LIVE=false
+SPARK=false
 PLOT_METRICS=""
 
 # GPU sysfs base path
@@ -122,6 +124,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --live)
             LIVE=true
+            shift
+            ;;
+        --spark)
+            SPARK=true
             shift
             ;;
         --plot-metrics)
@@ -513,7 +519,7 @@ live_draw() {
         printf "  Freq: ${W}%6s${X} MHz   Voltage: ${W}%4s${X} mV\n" "${gpu_freq:--}" "${gpu_volt:--}"
         printf "  Temp: ${W}%6s${X} °C   Power:   ${W}%6s${X} W\n" "${gpu_temp:--}" "${gpu_power:--}"
         printf "  Mem:  ${W}%6s${X} MHz   VRAM:    ${W}%s/%s${X} MiB\n" "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
-        if [[ ${#LIVE_GPU_TEMP_HIST[@]} -gt 1 ]]; then
+        if [[ "$SPARK" == true && ${#LIVE_GPU_TEMP_HIST[@]} -gt 1 ]]; then
             printf "  ${D}temp:${X} "
             live_sparkline LIVE_GPU_TEMP_HIST 40
             echo
@@ -527,7 +533,7 @@ live_draw() {
         printf "${G}CPU${X}\n"
         printf "  Freq: ${W}%6s${X} MHz   Usage:   ${W}%6s${X} %%\n" "${cpu_freq:--}" "${cpu_usage:--}"
         printf "  Temp: ${W}%6s${X} °C\n" "${cpu_temp:--}"
-        if [[ ${#LIVE_CPU_TEMP_HIST[@]} -gt 1 ]]; then
+        if [[ "$SPARK" == true && ${#LIVE_CPU_TEMP_HIST[@]} -gt 1 ]]; then
             printf "  ${D}usage:${X} "
             live_sparkline LIVE_CPU_USAGE_HIST 40
             echo
