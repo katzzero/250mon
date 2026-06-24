@@ -74,6 +74,15 @@ Options:
 
 # Single-line live display
 250mon --watch
+
+# Run as background daemon (writes state to /run/250mon/)
+250mon --service
+
+# Install systemd service
+250mon --service install
+
+# Stop service
+250mon --service stop
 ```
 
 ## CSV Output
@@ -112,6 +121,53 @@ rotate = 5
 ```
 
 CLI flags override config file values.
+
+## Service Mode
+
+Run 250mon as a background daemon that writes live state to `/run/250mon/`:
+
+```bash
+# Start as daemon
+250mon --service
+
+# Install as systemd service (auto-start on boot)
+250mon --service install
+
+# Manage service
+250mon --service stop
+250mon --service start
+250mon --service restart
+250mon --service uninstall
+```
+
+### State files
+
+The daemon writes to `/run/250mon/`:
+
+| File | Description |
+|------|-------------|
+| `state.json` | All values as JSON |
+| `gpu_freq` | GPU frequency (MHz) |
+| `gpu_temp` | GPU temperature (°C) |
+| `gpu_power` | GPU power draw (W) |
+| `gpu_voltage` | GPU voltage (mV) |
+| `gpu_mem_clock` | GPU memory clock (MHz) |
+| `gpu_vram_used` | VRAM used (MiB) |
+| `gpu_vram_total` | VRAM total (MiB) |
+| `cpu_freq` | CPU frequency (MHz) |
+| `cpu_temp` | CPU temperature (°C) |
+| `cpu_usage` | CPU usage (%) |
+| `nvme_temp` | NVMe temperature (°C) |
+
+### Reading state
+
+```bash
+# Read JSON state
+cat /run/250mon/state.json
+
+# Read individual metric
+cat /run/250mon/gpu_temp
+```
 
 ## License
 

@@ -27,7 +27,7 @@
 ## v0.3.0 — Enhancements
 
 - [x] `-w` / `--watch` — Single-line terminal display (live dashboard)
-- [ ] `--daemon` — Run as systemd service with generated unit file
+- [x] `--service` — Run as daemon with state files in /run/250mon/
 - [ ] Per-core CPU frequency logging (`--per-core`)
 - [ ] GPU clock state listing (`--list-states`)
 

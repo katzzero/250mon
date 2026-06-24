@@ -31,6 +31,7 @@ Options:
   --plot              Generate plot after logging (default: 30 samples)
   --draw              Print ASCII chart after logging (default: 60 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
+  --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
   -h, --help          Show this help message
   -v, --version       Show version
 
@@ -59,6 +60,9 @@ Examples:
   250mon --draw -c 30                 # Log 30 samples then show chart
   250mon --plot -c 50                 # Log 50 samples then save plot
   250mon --max-size 10M --rotate 3    # Rotate at 10MB, keep 3 files
+  250mon --service                    # Run as background daemon
+  250mon --service install            # Install systemd service
+  250mon --service stop               # Stop service
 
 Config file: ~/.config/250mon/config.toml
   interval = 1000
@@ -88,7 +92,12 @@ SPARK=false
 PLOT_METRICS=""
 MAX_SIZE=""
 ROTATE=5
+SERVICE=""
+SERVICE_ACTION=""
 CONFIG_FILE="${HOME}/.config/250mon/config.toml"
+STATE_DIR="/run/250mon"
+PID_FILE="${STATE_DIR}/250mon.pid"
+SERVICE_DAEMON=false
 
 # GPU sysfs base path
 GPU_PATH=""
@@ -184,6 +193,20 @@ while [[ $# -gt 0 ]]; do
         --rotate)
             ROTATE="$2"
             shift 2
+            ;;
+        --service)
+            SERVICE=true
+            if [[ $# -gt 1 && "$2" != --* ]]; then
+                SERVICE_ACTION="$2"
+                shift 2
+            else
+                shift
+            fi
+            ;;
+        --service-daemon)
+            SERVICE=true
+            SERVICE_DAEMON=true
+            shift
             ;;
         -h|--help)
             usage
@@ -518,6 +541,123 @@ emit_json() {
     printf '}\n'
 }
 
+# --- Service functions ---
+write_state() {
+    local gpu_freq="$1" gpu_volt="$2" gpu_temp="$3" gpu_load="$4" gpu_mem="$5"
+    local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
+    local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
+
+    [[ ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR"
+
+    # Individual files
+    [[ -n "$gpu_freq" ]] && echo "$gpu_freq" > "${STATE_DIR}/gpu_freq"
+    [[ -n "$gpu_volt" ]] && echo "$gpu_volt" > "${STATE_DIR}/gpu_voltage"
+    [[ -n "$gpu_temp" ]] && echo "$gpu_temp" > "${STATE_DIR}/gpu_temp"
+    [[ -n "$gpu_load" ]] && echo "$gpu_load" > "${STATE_DIR}/gpu_load"
+    [[ -n "$gpu_mem" ]] && echo "$gpu_mem" > "${STATE_DIR}/gpu_mem_clock"
+    [[ -n "$gpu_power" ]] && echo "$gpu_power" > "${STATE_DIR}/gpu_power"
+    [[ -n "$gpu_vram_used" ]] && echo "$gpu_vram_used" > "${STATE_DIR}/gpu_vram_used"
+    [[ -n "$gpu_vram_total" ]] && echo "$gpu_vram_total" > "${STATE_DIR}/gpu_vram_total"
+    [[ -n "$cpu_freq" ]] && echo "$cpu_freq" > "${STATE_DIR}/cpu_freq"
+    [[ -n "$cpu_temp" ]] && echo "$cpu_temp" > "${STATE_DIR}/cpu_temp"
+    [[ -n "$cpu_usage" ]] && echo "$cpu_usage" > "${STATE_DIR}/cpu_usage"
+    [[ -n "$nvme_temp" ]] && echo "$nvme_temp" > "${STATE_DIR}/nvme_temp"
+
+    # JSON state file
+    printf '{"gpu_freq":%s,"gpu_voltage":%s,"gpu_temp":%s,"gpu_load":%s,"gpu_mem_clock":%s,"gpu_power":%s,"gpu_vram_used":%s,"gpu_vram_total":%s,"cpu_freq":%s,"cpu_temp":%s,"cpu_usage":%s,"nvme_temp":%s}\n' \
+        "$(json_val "${gpu_freq}" num)" \
+        "$(json_val "${gpu_volt}" num)" \
+        "$(json_val "${gpu_temp}" num)" \
+        "$(json_val "${gpu_load}" num)" \
+        "$(json_val "${gpu_mem}" num)" \
+        "$(json_val "${gpu_power}" num)" \
+        "$(json_val "${gpu_vram_used}" num)" \
+        "$(json_val "${gpu_vram_total}" num)" \
+        "$(json_val "${cpu_freq}" num)" \
+        "$(json_val "${cpu_temp}" num)" \
+        "$(json_val "${cpu_usage}" num)" \
+        "$(json_val "${nvme_temp}" num)" > "${STATE_DIR}/state.json"
+}
+
+service_install() {
+    echo "Installing 250mon service..."
+
+    # Create tmpfiles.d config
+    mkdir -p /etc/tmpfiles.d
+    cat > /etc/tmpfiles.d/250mon.conf <<TMPFILES
+d /run/250mon 0755 root root -
+TMPFILES
+
+    # Create systemd unit
+    cat > /etc/systemd/system/250mon.service <<'UNIT'
+[Unit]
+Description=250mon Hardware Monitor
+After=multi-user.target
+
+[Service]
+Type=simple
+Environment=HOME=/root
+ExecStart=/usr/local/bin/250mon -q -i 1000
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+    systemctl daemon-reload
+    systemctl enable 250mon.service
+    systemctl start 250mon.service
+    echo "Service installed and started."
+}
+
+service_uninstall() {
+    echo "Stopping 250mon service..."
+    systemctl stop 250mon.service 2>/dev/null || true
+    systemctl disable 250mon.service 2>/dev/null || true
+    rm -f /etc/systemd/system/250mon.service
+    rm -f /etc/tmpfiles.d/250mon.conf
+    systemctl daemon-reload
+    echo "Service removed."
+}
+
+service_start() {
+    systemctl start 250mon.service
+    echo "Service started."
+}
+
+service_stop() {
+    systemctl stop 250mon.service
+    echo "Service stopped."
+}
+
+service_restart() {
+    systemctl restart 250mon.service
+    echo "Service restarted."
+}
+
+service_status() {
+    systemctl status 250mon.service
+}
+
+# Handle --service actions early (before main loop)
+if [[ "$SERVICE" == true ]]; then
+    case "$SERVICE_ACTION" in
+        install)   service_install; exit 0 ;;
+        uninstall) service_uninstall; exit 0 ;;
+        start)     service_start; exit 0 ;;
+        stop)      service_stop; exit 0 ;;
+        restart)   service_restart; exit 0 ;;
+        status)    service_status; exit 0 ;;
+        "")        ;; # Daemon mode, handled below
+        *)
+            echo "Error: Unknown service action '$SERVICE_ACTION'" >&2
+            echo "Usage: 250mon --service [install|uninstall|start|stop|restart|status]" >&2
+            exit 1
+            ;;
+    esac
+fi
+
 # --- Setup ---
 INTERVAL_SEC=$(awk "BEGIN {printf \"%.3f\", $INTERVAL_MS / 1000}")
 
@@ -535,6 +675,27 @@ cleanup() {
     exec 3>&- 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
+
+# --- Daemon mode for --service ---
+if [[ "$SERVICE" == true && "$SERVICE_DAEMON" == false ]]; then
+    mkdir -p "$STATE_DIR"
+
+    # Check if already running
+    if [[ -f "$PID_FILE" ]]; then
+        local_pid=$(cat "$PID_FILE" 2>/dev/null)
+        if [[ -n "$local_pid" ]] && kill -0 "$local_pid" 2>/dev/null; then
+            echo "250mon service already running (PID $local_pid)"
+            exit 1
+        fi
+        rm -f "$PID_FILE"
+    fi
+
+    # Fork to background using internal daemon flag
+    nohup 250mon --service-daemon > /dev/null 2>&1 &
+    echo $! > "$PID_FILE"
+    echo "250mon service started (PID $!)"
+    exit 0
+fi
 
 # Write header for CSV
 if [[ "$FORMAT" == "csv" && "$LIVE" == false && "$WATCH" == false ]]; then
@@ -756,6 +917,13 @@ while true; do
                                 "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" ;;
             esac
         fi
+    fi
+
+    # Write state files for --service mode
+    if [[ "$SERVICE" == true ]]; then
+        write_state "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                    "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
     fi
 
     sample_count=$((sample_count + 1))
