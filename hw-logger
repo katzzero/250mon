@@ -441,7 +441,54 @@ if [[ "$LOG_CPU" == true ]]; then
 fi
 
 # --- Live dashboard ---
-LIVE_HISTORY=""
+LIVE_GPU_TEMP_HIST=()
+LIVE_CPU_TEMP_HIST=()
+LIVE_GPU_POWER_HIST=()
+LIVE_CPU_USAGE_HIST=()
+LIVE_SPARK=" ▁▂▃▄▅▆▇█"
+LIVE_MAX_HIST=60
+
+live_sparkline() {
+    local -n arr=$1
+    local w=$2
+    local len=${#arr[@]}
+    if [[ "$len" -eq 0 ]]; then
+        printf '%0.s ' $(seq 1 $w)
+        return
+    fi
+    # Use awk for min/max/sparkline
+    printf '%s\n' "${arr[@]}" | awk -v w="$w" -v blocks=" ▁▂▃▄▅▆▇█" '
+    {
+        a[NR]=$1
+        if(NR==1){mn=$1;mx=$1}
+        if($1<mn)mn=$1
+        if($1>mx)mx=$1
+    }
+    END {
+        n=NR
+        if(n==0)exit
+        range=mx-mn
+        if(range==0)range=1
+        step=1
+        if(n>w)step=n/w
+        nb=length(blocks)
+        out=""
+        i=1
+        while(i<=n){
+            idx=int(i)
+            if(idx<1)idx=1
+            if(idx>n)idx=n
+            v=a[idx]
+            bi=int((v-mn)/range*(nb-1))
+            if(bi<0)bi=0
+            if(bi>=nb)bi=nb-1
+            out=out substr(blocks,bi+1,1)
+            i=i+step
+        }
+        printf "%s", out
+    }'
+}
+
 live_draw() {
     local ts="$1"
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
@@ -466,12 +513,28 @@ live_draw() {
         printf "  Freq: ${W}%6s${X} MHz   Voltage: ${W}%4s${X} mV\n" "${gpu_freq:--}" "${gpu_volt:--}"
         printf "  Temp: ${W}%6s${X} °C   Power:   ${W}%6s${X} W\n" "${gpu_temp:--}" "${gpu_power:--}"
         printf "  Mem:  ${W}%6s${X} MHz   VRAM:    ${W}%s/%s${X} MiB\n" "${gpu_mem:--}" "${gpu_vram_used:--}" "${gpu_vram_total:--}"
+        if [[ ${#LIVE_GPU_TEMP_HIST[@]} -gt 1 ]]; then
+            printf "  ${D}temp:${X} "
+            live_sparkline LIVE_GPU_TEMP_HIST 40
+            echo
+            printf "  ${D}power:${X} "
+            live_sparkline LIVE_GPU_POWER_HIST 40
+            echo
+        fi
     fi
 
     if [[ "$LOG_CPU" == true ]]; then
         printf "${G}CPU${X}\n"
         printf "  Freq: ${W}%6s${X} MHz   Usage:   ${W}%6s${X} %%\n" "${cpu_freq:--}" "${cpu_usage:--}"
         printf "  Temp: ${W}%6s${X} °C\n" "${cpu_temp:--}"
+        if [[ ${#LIVE_CPU_TEMP_HIST[@]} -gt 1 ]]; then
+            printf "  ${D}usage:${X} "
+            live_sparkline LIVE_CPU_USAGE_HIST 40
+            echo
+            printf "  ${D}temp: ${X} "
+            live_sparkline LIVE_CPU_TEMP_HIST 40
+            echo
+        fi
     fi
 
     if [[ -n "$nvme_temp" ]]; then
@@ -513,6 +576,17 @@ while true; do
 
     # Output
     if [[ "$LIVE" == true ]]; then
+        # Collect history for sparklines
+        [[ -n "$gpu_temp" ]] && LIVE_GPU_TEMP_HIST+=("$gpu_temp")
+        [[ -n "$gpu_power" ]] && LIVE_GPU_POWER_HIST+=("$gpu_power")
+        [[ -n "$cpu_temp" ]] && LIVE_CPU_TEMP_HIST+=("$cpu_temp")
+        [[ -n "$cpu_usage" ]] && LIVE_CPU_USAGE_HIST+=("$cpu_usage")
+        # Trim to max
+        [[ ${#LIVE_GPU_TEMP_HIST[@]} -gt $LIVE_MAX_HIST ]] && LIVE_GPU_TEMP_HIST=("${LIVE_GPU_TEMP_HIST[@]:1}")
+        [[ ${#LIVE_GPU_POWER_HIST[@]} -gt $LIVE_MAX_HIST ]] && LIVE_GPU_POWER_HIST=("${LIVE_GPU_POWER_HIST[@]:1}")
+        [[ ${#LIVE_CPU_TEMP_HIST[@]} -gt $LIVE_MAX_HIST ]] && LIVE_CPU_TEMP_HIST=("${LIVE_CPU_TEMP_HIST[@]:1}")
+        [[ ${#LIVE_CPU_USAGE_HIST[@]} -gt $LIVE_MAX_HIST ]] && LIVE_CPU_USAGE_HIST=("${LIVE_CPU_USAGE_HIST[@]:1}")
+
         live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
                   "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
