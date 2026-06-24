@@ -20,7 +20,7 @@ Component selection (default: both GPU and CPU):
 Options:
   -i, --interval MS   Sampling interval in milliseconds (default: 1000)
   -f, --format FMT    Output format: csv or json (default: csv)
-  -o, --output FILE   Log to file (also prints to stdout unless --quiet)
+  -o, --output FILE   Log to file (default: ~/hwlog-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
   -h, --help          Show this help message
@@ -39,10 +39,10 @@ CPU Metrics:
   cpu_usage_pct       Aggregate CPU usage percentage
 
 Examples:
-  hw-logger                              # Log GPU + CPU every 1s as CSV
+  hw-logger                              # Log to ~/hwlog-YYYYMMDD-HHMMSS.csv
   hw-logger --gpu -i 100 -f json         # GPU only, 100ms interval, JSON
   hw-logger --cpu -i 500 -c 60           # CPU only, 500ms, 60 samples
-  hw-logger -i 2000 -o hw.csv -q         # Both, to file, quiet
+  hw-logger -i 2000 -o hw.csv -q         # Custom file, quiet
 EOF
 }
 
@@ -122,6 +122,13 @@ fi
 if ! [[ "$INTERVAL_MS" =~ ^[0-9]+$ ]] || [[ "$INTERVAL_MS" -lt 1 ]]; then
     echo "Error: Interval must be a positive integer (ms)." >&2
     exit 1
+fi
+
+# --- Default output path ---
+if [[ -z "$OUTPUT" ]]; then
+    _ext="csv"
+    [[ "$FORMAT" == "json" ]] && _ext="jsonl"
+    OUTPUT="${HOME}/hwlog-$(date '+%Y%m%d-%H%M%S').${_ext}"
 fi
 
 # --- Find GPU sysfs path ---

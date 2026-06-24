@@ -24,7 +24,7 @@ Component selection (default: both GPU and CPU):
 Options:
   -i, --interval MS   Sampling interval in milliseconds (default: 1000)
   -f, --format FMT    Output format: csv or json (default: csv)
-  -o, --output FILE   Log to file (also prints to stdout unless --quiet)
+  -o, --output FILE   Log to file (default: ~/hwlog-YYYYMMDD-HHMMSS.<ext>)
   -q, --quiet         Suppress stdout, write to file only
   -c, --count N       Number of samples then exit (default: infinite)
   -h, --help          Show help message
@@ -54,20 +54,17 @@ Options:
 ## Examples
 
 ```bash
-# Log GPU + CPU every 1s as CSV
+# Log to ~/hwlog-YYYYMMDD-HHMMSS.csv
 hw-logger
 
-# GPU only, 100ms interval, JSON
+# GPU only, 100ms interval, JSON (saves to ~/hwlog-YYYYMMDD-HHMMSS.jsonl)
 hw-logger --gpu -i 100 -f json
 
 # CPU only, 500ms, 60 samples
 hw-logger --cpu -i 500 -c 60
 
-# Both to file, quiet
+# Custom output file, quiet
 hw-logger -i 2000 -o hw.csv -q
-
-# JSON to file + terminal
-hw-logger -f json -i 1000 -o /tmp/hw_log.jsonl
 ```
 
 ## CSV Output
