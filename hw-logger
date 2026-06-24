@@ -448,7 +448,6 @@ live_draw() {
 
     printf '\033[2J\033[H'
 
-    local B="\033[1;36m"
     local R="\033[1;31m"
     local G="\033[1;34m"
     local N="\033[1;32m"
@@ -456,9 +455,9 @@ live_draw() {
     local W="\033[1m"
     local X="\033[0m"
 
-    printf "${B}+------ hw-logger live dashboard --------------------------------------+%s\n" "$X"
-    printf "${B}|${X} %s%-50s${B}|${X}\n" "$W" "$ts"
-    printf "${B}+-----------------------------------------------------------------------+%s\n" "$X"
+    printf "${W}hw-logger live dashboard${X}  %s\n" "$ts"
+    printf '%0.s-' {1..60}
+    echo
 
     if [[ "$LOG_GPU" == true ]]; then
         printf "${R}GPU${X}\n"
@@ -478,9 +477,8 @@ live_draw() {
         printf "  Temp: ${W}%6s${X} °C\n" "$nvme_temp"
     fi
 
-    printf "${B}+-----------------------------------------------------------------------+%s\n" "$X"
-    printf "${B}|${X} ${D}Ctrl+C to exit${X}                                        ${W}#%-5s${X} ${B}|${X}\n" "$sample_count"
-    printf "${B}+-----------------------------------------------------------------------+%s\n" "$X"
+    printf '%0.s-' {1..60}
+    printf "  ${D}Ctrl+C to exit${X}  ${W}sample #%-5s${X}\n" "$sample_count"
 }
 
 # --- Main loop ---
