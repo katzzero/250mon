@@ -4,6 +4,8 @@ Lightweight bash logger for AMD Cyan Skillfish (BC-250) GPU and CPU metrics.
 
 Reads frequency, voltage, temperature, load, and usage from sysfs/procfs and outputs in CSV or JSON format.
 
+> Tested on CachyOS (Arch-based) with AMD BC-250 APU.
+
 ## Dependencies
 
 - `bash`
