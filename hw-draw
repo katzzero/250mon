@@ -199,7 +199,7 @@ def cli_plot(timestamps, columns, metrics, width):
 
         # Print label + chart
         last = valid_vals[-1]
-        print(f"\033[1m{label:14s}\033[0m {blocks} {last:.1f}{unit}")
+        print(f"\033[1m{label:14s}\033[0m {blocks} {vmin:.0f}-{vmax:.0f}{unit} ({last:.1f})")
 
 
 def plot_metrics(timestamps, columns, metrics, title, output, width, height, dpi, show_grid):
