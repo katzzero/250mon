@@ -115,6 +115,60 @@ GPU_PATH=""
 PREV_CPU_TOTAL=0
 PREV_CPU_IDLE=0
 
+# Session min/max tracking
+SESSION_MIN_gpu_freq="" SESSION_MAX_gpu_freq=""
+SESSION_MIN_gpu_volt="" SESSION_MAX_gpu_volt=""
+SESSION_MIN_gpu_temp="" SESSION_MAX_gpu_temp=""
+SESSION_MIN_gpu_mem="" SESSION_MAX_gpu_mem=""
+SESSION_MIN_gpu_power="" SESSION_MAX_gpu_power=""
+SESSION_MIN_gpu_vram_used="" SESSION_MAX_gpu_vram_used=""
+SESSION_MIN_cpu_freq="" SESSION_MAX_cpu_freq=""
+SESSION_MIN_cpu_temp="" SESSION_MAX_cpu_temp=""
+SESSION_MIN_cpu_usage="" SESSION_MAX_cpu_usage=""
+SESSION_MIN_nvme_temp="" SESSION_MAX_nvme_temp=""
+SESSION_MIN_fan_rpm="" SESSION_MAX_fan_rpm=""
+SESSION_START_TIME=""
+SESSION_SAMPLE_COUNT=0
+
+# Update min/max for a metric
+update_min_max() {
+    local var_name="$1"
+    local value="$2"
+    [[ -z "$value" ]] && return
+    
+    local min_var="SESSION_MIN_${var_name}"
+    local max_var="SESSION_MAX_${var_name}"
+    
+    # Set min
+    if [[ -z "${!min_var}" ]]; then
+        eval "$min_var=$value"
+    elif awk "BEGIN {exit !($value < ${!min_var})}"; then
+        eval "$min_var=$value"
+    fi
+    
+    # Set max
+    if [[ -z "${!max_var}" ]]; then
+        eval "$max_var=$value"
+    elif awk "BEGIN {exit !($value > ${!max_var})}"; then
+        eval "$max_var=$value"
+    fi
+}
+
+# Session min/max tracking
+SESSION_MIN_gpu_freq="" SESSION_MAX_gpu_freq=""
+SESSION_MIN_gpu_volt="" SESSION_MAX_gpu_volt=""
+SESSION_MIN_gpu_temp="" SESSION_MAX_gpu_temp=""
+SESSION_MIN_gpu_mem="" SESSION_MAX_gpu_mem=""
+SESSION_MIN_gpu_power="" SESSION_MAX_gpu_power=""
+SESSION_MIN_gpu_vram_used="" SESSION_MAX_gpu_vram_used=""
+SESSION_MIN_cpu_freq="" SESSION_MAX_cpu_freq=""
+SESSION_MIN_cpu_temp="" SESSION_MAX_cpu_temp=""
+SESSION_MIN_cpu_usage="" SESSION_MAX_cpu_usage=""
+SESSION_MIN_nvme_temp="" SESSION_MAX_nvme_temp=""
+SESSION_MIN_fan_rpm="" SESSION_MAX_fan_rpm=""
+SESSION_START_TIME=""
+SESSION_SAMPLE_COUNT=0
+
 # --- Load config file ---
 load_config() {
     local cfg="$CONFIG_FILE"
@@ -775,10 +829,11 @@ write_state() {
     local gpu_freq="$1" gpu_volt="$2" gpu_temp="$3" gpu_mem="$4"
     local gpu_power="$5" gpu_vram_used="$6" gpu_vram_total="$7"
     local cpu_freq="$8" cpu_temp="$9" cpu_usage="${10}" nvme_temp="${11}"
+    local fan_rpm="${12}"
 
     [[ ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR"
 
-    # Individual files
+    # Individual files (current values)
     [[ -n "$gpu_freq" ]] && echo "$gpu_freq" > "${STATE_DIR}/gpu_freq"
     [[ -n "$gpu_volt" ]] && echo "$gpu_volt" > "${STATE_DIR}/gpu_voltage"
     [[ -n "$gpu_temp" ]] && echo "$gpu_temp" > "${STATE_DIR}/gpu_temp"
@@ -790,9 +845,38 @@ write_state() {
     [[ -n "$cpu_temp" ]] && echo "$cpu_temp" > "${STATE_DIR}/cpu_temp"
     [[ -n "$cpu_usage" ]] && echo "$cpu_usage" > "${STATE_DIR}/cpu_usage"
     [[ -n "$nvme_temp" ]] && echo "$nvme_temp" > "${STATE_DIR}/nvme_temp"
+    [[ -n "$fan_rpm" ]] && echo "$fan_rpm" > "${STATE_DIR}/fan_rpm"
 
-    # JSON state file
-    printf '{"gpu_freq":%s,"gpu_voltage":%s,"gpu_temp":%s,"gpu_mem_clock":%s,"gpu_power":%s,"gpu_vram_used":%s,"gpu_vram_total":%s,"cpu_freq":%s,"cpu_temp":%s,"cpu_usage":%s,"nvme_temp":%s}\n' \
+    # Session min/max files
+    [[ -n "${SESSION_MIN_gpu_freq}" ]] && echo "${SESSION_MIN_gpu_freq}" > "${STATE_DIR}/gpu_freq_min"
+    [[ -n "${SESSION_MAX_gpu_freq}" ]] && echo "${SESSION_MAX_gpu_freq}" > "${STATE_DIR}/gpu_freq_max"
+    [[ -n "${SESSION_MIN_gpu_volt}" ]] && echo "${SESSION_MIN_gpu_volt}" > "${STATE_DIR}/gpu_voltage_min"
+    [[ -n "${SESSION_MAX_gpu_volt}" ]] && echo "${SESSION_MAX_gpu_volt}" > "${STATE_DIR}/gpu_voltage_max"
+    [[ -n "${SESSION_MIN_gpu_temp}" ]] && echo "${SESSION_MIN_gpu_temp}" > "${STATE_DIR}/gpu_temp_min"
+    [[ -n "${SESSION_MAX_gpu_temp}" ]] && echo "${SESSION_MAX_gpu_temp}" > "${STATE_DIR}/gpu_temp_max"
+    [[ -n "${SESSION_MIN_gpu_mem}" ]] && echo "${SESSION_MIN_gpu_mem}" > "${STATE_DIR}/gpu_mem_clock_min"
+    [[ -n "${SESSION_MAX_gpu_mem}" ]] && echo "${SESSION_MAX_gpu_mem}" > "${STATE_DIR}/gpu_mem_clock_max"
+    [[ -n "${SESSION_MIN_gpu_power}" ]] && echo "${SESSION_MIN_gpu_power}" > "${STATE_DIR}/gpu_power_min"
+    [[ -n "${SESSION_MAX_gpu_power}" ]] && echo "${SESSION_MAX_gpu_power}" > "${STATE_DIR}/gpu_power_max"
+    [[ -n "${SESSION_MIN_gpu_vram_used}" ]] && echo "${SESSION_MIN_gpu_vram_used}" > "${STATE_DIR}/gpu_vram_used_min"
+    [[ -n "${SESSION_MAX_gpu_vram_used}" ]] && echo "${SESSION_MAX_gpu_vram_used}" > "${STATE_DIR}/gpu_vram_used_max"
+    [[ -n "${SESSION_MIN_cpu_freq}" ]] && echo "${SESSION_MIN_cpu_freq}" > "${STATE_DIR}/cpu_freq_min"
+    [[ -n "${SESSION_MAX_cpu_freq}" ]] && echo "${SESSION_MAX_cpu_freq}" > "${STATE_DIR}/cpu_freq_max"
+    [[ -n "${SESSION_MIN_cpu_temp}" ]] && echo "${SESSION_MIN_cpu_temp}" > "${STATE_DIR}/cpu_temp_min"
+    [[ -n "${SESSION_MAX_cpu_temp}" ]] && echo "${SESSION_MAX_cpu_temp}" > "${STATE_DIR}/cpu_temp_max"
+    [[ -n "${SESSION_MIN_cpu_usage}" ]] && echo "${SESSION_MIN_cpu_usage}" > "${STATE_DIR}/cpu_usage_min"
+    [[ -n "${SESSION_MAX_cpu_usage}" ]] && echo "${SESSION_MAX_cpu_usage}" > "${STATE_DIR}/cpu_usage_max"
+    [[ -n "${SESSION_MIN_nvme_temp}" ]] && echo "${SESSION_MIN_nvme_temp}" > "${STATE_DIR}/nvme_temp_min"
+    [[ -n "${SESSION_MAX_nvme_temp}" ]] && echo "${SESSION_MAX_nvme_temp}" > "${STATE_DIR}/nvme_temp_max"
+    [[ -n "${SESSION_MIN_fan_rpm}" ]] && echo "${SESSION_MIN_fan_rpm}" > "${STATE_DIR}/fan_rpm_min"
+    [[ -n "${SESSION_MAX_fan_rpm}" ]] && echo "${SESSION_MAX_fan_rpm}" > "${STATE_DIR}/fan_rpm_max"
+
+    # Session metadata
+    echo "$SESSION_START_TIME" > "${STATE_DIR}/session_start"
+    echo "$SESSION_SAMPLE_COUNT" > "${STATE_DIR}/sample_count"
+
+    # JSON state file with min/max
+    printf '{"gpu_freq":%s,"gpu_voltage":%s,"gpu_temp":%s,"gpu_mem_clock":%s,"gpu_power":%s,"gpu_vram_used":%s,"gpu_vram_total":%s,"cpu_freq":%s,"cpu_temp":%s,"cpu_usage":%s,"nvme_temp":%s,"fan_rpm":%s,"session":{"start":"%s","samples":%d,"gpu_freq":{"min":%s,"max":%s},"gpu_temp":{"min":%s,"max":%s},"gpu_power":{"min":%s,"max":%s},"cpu_freq":{"min":%s,"max":%s},"cpu_temp":{"min":%s,"max":%s},"cpu_usage":{"min":%s,"max":%s},"nvme_temp":{"min":%s,"max":%s},"fan_rpm":{"min":%s,"max":%s}}}\n' \
         "$(json_val "${gpu_freq}" num)" \
         "$(json_val "${gpu_volt}" num)" \
         "$(json_val "${gpu_temp}" num)" \
@@ -803,7 +887,26 @@ write_state() {
         "$(json_val "${cpu_freq}" num)" \
         "$(json_val "${cpu_temp}" num)" \
         "$(json_val "${cpu_usage}" num)" \
-        "$(json_val "${nvme_temp}" num)" > "${STATE_DIR}/state.json"
+        "$(json_val "${nvme_temp}" num)" \
+        "$(json_val "${fan_rpm}" num)" \
+        "$SESSION_START_TIME" \
+        "$SESSION_SAMPLE_COUNT" \
+        "$(json_val "${SESSION_MIN_gpu_freq}" num)" \
+        "$(json_val "${SESSION_MAX_gpu_freq}" num)" \
+        "$(json_val "${SESSION_MIN_gpu_temp}" num)" \
+        "$(json_val "${SESSION_MAX_gpu_temp}" num)" \
+        "$(json_val "${SESSION_MIN_gpu_power}" num)" \
+        "$(json_val "${SESSION_MAX_gpu_power}" num)" \
+        "$(json_val "${SESSION_MIN_cpu_freq}" num)" \
+        "$(json_val "${SESSION_MAX_cpu_freq}" num)" \
+        "$(json_val "${SESSION_MIN_cpu_temp}" num)" \
+        "$(json_val "${SESSION_MAX_cpu_temp}" num)" \
+        "$(json_val "${SESSION_MIN_cpu_usage}" num)" \
+        "$(json_val "${SESSION_MAX_cpu_usage}" num)" \
+        "$(json_val "${SESSION_MIN_nvme_temp}" num)" \
+        "$(json_val "${SESSION_MAX_nvme_temp}" num)" \
+        "$(json_val "${SESSION_MIN_fan_rpm}" num)" \
+        "$(json_val "${SESSION_MAX_fan_rpm}" num)" > "${STATE_DIR}/state.json"
 }
 
 service_install() {
@@ -1111,6 +1214,7 @@ watch_draw() {
 
 # --- Main loop ---
 sample_count=0
+SESSION_START_TIME=$(timestamp)
 while true; do
     ts=$(timestamp)
 
@@ -1125,6 +1229,15 @@ while true; do
         gpu_power=$(read_gpu_power) || true
         gpu_vram_used=$(read_gpu_vram_used) || true
         gpu_vram_total=$(read_gpu_vram_total) || true
+        # Update session min/max
+        [[ "$SERVICE" == true ]] && {
+            update_min_max "gpu_freq" "$gpu_freq"
+            update_min_max "gpu_volt" "$gpu_volt"
+            update_min_max "gpu_temp" "$gpu_temp"
+            update_min_max "gpu_mem" "$gpu_mem"
+            update_min_max "gpu_power" "$gpu_power"
+            update_min_max "gpu_vram_used" "$gpu_vram_used"
+        }
     fi
 
     # CPU
@@ -1140,12 +1253,21 @@ while true; do
         cpu_temp=$(read_cpu_temp) || true
         cpu_usage=$(read_cpu_usage) || true
         nvme_temp=$(read_nvme_temp) || true
+        # Update session min/max
+        [[ "$SERVICE" == true ]] && {
+            update_min_max "cpu_freq" "$cpu_freq"
+            update_min_max "cpu_temp" "$cpu_temp"
+            update_min_max "cpu_usage" "$cpu_usage"
+            update_min_max "nvme_temp" "$nvme_temp"
+        }
     fi
 
     # Fan
     fan_rpm=""
     if [[ "$LOG_FAN" == true ]]; then
         fan_rpm=$(read_fan_speed) || true
+        # Update session min/max
+        [[ "$SERVICE" == true ]] && update_min_max "fan_rpm" "$fan_rpm"
     fi
 
     # Output
@@ -1194,9 +1316,10 @@ while true; do
 
     # Write state files for --service mode
     if [[ "$SERVICE" == true ]]; then
+        SESSION_SAMPLE_COUNT=$sample_count
         write_state "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                     "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
+                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm"
     fi
 
     sample_count=$((sample_count + 1))
