@@ -2,7 +2,7 @@
 
 Lightweight hardware monitor for AMD Cyan Skillfish (BC-250) GPU and CPU.
 
-Reads frequency, voltage, temperature, load, power, and usage from sysfs/procfs. Outputs CSV, JSON, live dashboards, WebSocket streams, and plots.
+Reads frequency, voltage, temperature, power, usage, and fan speed from sysfs/procfs. Outputs CSV, JSON, live dashboards, WebSocket streams, and plots.
 
 > Tested on CachyOS (Arch-based) with AMD BC-250 APU.
 
@@ -81,11 +81,20 @@ Advanced:
 
 Service:
   --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
-  --serve [PORT]      Start WebSocket server (default: 25052)
 
 Info:
   -h, --help          Show this help message
   -v, --version       Show version
+```
+
+### 250mon-serve
+
+```
+250mon-serve [WS_PORT] [HTTP_PORT] [INTERVAL]
+
+  WS_PORT      WebSocket port (default: 25052)
+  HTTP_PORT    HTTP REST port (default: 25053)
+  INTERVAL     Broadcast interval in seconds (default: 1.0)
 ```
 
 ## Metrics
@@ -198,42 +207,84 @@ Run 250mon as a background daemon writing live state to `/run/250mon/`:
 
 | File | Description |
 |------|-------------|
-| `state.json` | All values as JSON |
+| `state.json` | All values as JSON with min/max |
 | `gpu_freq` | GPU frequency (MHz) |
+| `gpu_freq_min` / `gpu_freq_max` | Session min/max |
 | `gpu_temp` | GPU temperature (°C) |
+| `gpu_temp_min` / `gpu_temp_max` | Session min/max |
 | `gpu_power` | GPU power draw (W) |
+| `gpu_power_min` / `gpu_power_max` | Session min/max |
 | `gpu_voltage` | GPU voltage (mV) |
+| `gpu_voltage_min` / `gpu_voltage_max` | Session min/max |
 | `gpu_mem_clock` | GPU memory clock (MHz) |
+| `gpu_mem_clock_min` / `gpu_mem_clock_max` | Session min/max |
 | `gpu_vram_used` | VRAM used (MiB) |
-| `gpu_vram_total` | VRAM total (MiB) |
+| `gpu_vram_used_min` / `gpu_vram_used_max` | Session min/max |
 | `cpu_freq` | CPU frequency (MHz) |
+| `cpu_freq_min` / `cpu_freq_max` | Session min/max |
 | `cpu_temp` | CPU temperature (°C) |
+| `cpu_temp_min` / `cpu_temp_max` | Session min/max |
 | `cpu_usage` | CPU usage (%) |
+| `cpu_usage_min` / `cpu_usage_max` | Session min/max |
 | `nvme_temp` | NVMe temperature (°C) |
+| `nvme_temp_min` / `nvme_temp_max` | Session min/max |
+| `fan_rpm` | Fan speed (RPM) |
+| `fan_rpm_min` / `fan_rpm_max` | Session min/max |
+| `session_start` | Session start timestamp |
+| `sample_count` | Number of samples collected |
 
 ```bash
-cat /run/250mon/state.json      # Read all state
-cat /run/250mon/gpu_temp        # Read individual metric
+cat /run/250mon/state.json      # Read all state with min/max
+cat /run/250mon/gpu_temp        # Read individual metric (current)
+cat /run/250mon/gpu_temp_min    # Read session minimum
+cat /run/250mon/gpu_temp_max    # Read session maximum
 ```
 
-## WebSocket Server
+### state.json format
+
+```json
+{
+  "session": {"start": "2026-06-24T16:17:27-0300", "samples": 32},
+  "gpu_freq": {"value": 350, "min": 350, "max": 350},
+  "gpu_temp": {"value": 53.0, "min": 52.0, "max": 54.0},
+  "gpu_power": {"value": 52.2, "min": 38.1, "max": 55.1},
+  "cpu_freq": {"value": 2734, "min": 2360, "max": 3595},
+  "cpu_temp": {"value": 61.9, "min": 60.9, "max": 61.9},
+  "fan_rpm": {"value": 1064, "min": 1043, "max": 1076}
+}
+```
+
+## WebSocket + HTTP Server
 
 Stream live state to clients (web dashboards, scripts, etc.):
 
 ```bash
-250mon --serve          # Default port 25052
-250mon --serve 8080     # Custom port
+250mon-serve                        # WS:25052, HTTP:25053
+250mon-serve 8080                   # Custom WS port
+250mon-serve 8080 8081              # Custom WS + HTTP ports
+250mon-serve 8080 8081 0.5          # Custom interval (seconds)
 ```
 
-Streams `state.json` to all connected clients every second.
+| Protocol | Default Port | Endpoint |
+|----------|-------------|----------|
+| WebSocket | 25052 | `ws://host:25052` |
+| HTTP | 25053 | `GET http://host:25053/` |
+
+Both return the same `state.json` with `{value, min, max}` per metric.
 
 Requires: `python3`, `websockets` module (`pip install websockets`)
 
-### Client example
+### Client examples
 
+**WebSocket:**
 ```javascript
 const ws = new WebSocket("ws://localhost:25052");
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
+```
+
+**HTTP:**
+```bash
+curl http://localhost:25053/
 ```
 
 ## License
