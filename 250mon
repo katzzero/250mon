@@ -88,6 +88,7 @@ QUIET=false
 COUNT=0
 LOG_GPU=true
 LOG_CPU=true
+LOG_FAN=true
 PLOT=false
 DRAW=false
 LIVE=false
@@ -532,6 +533,82 @@ read_nvme_temp() {
     done
 }
 
+# --- Fan speed reading ---
+fan_sensor_exists() {
+    # Check if nct6686/nct6687 or any hwmon with fan sensors exists
+    local hwmon_dir="/sys/class/hwmon"
+    local hwmon name_file fan_file
+    
+    for hwmon in "$hwmon_dir"/*/; do
+        name_file="${hwmon}name"
+        if [[ -f "$name_file" ]]; then
+            name=$(cat "$name_file" 2>/dev/null)
+            if [[ "$name" == "nct6686" || "$name" == "nct6687" ]]; then
+                fan_file="${hwmon}fan1_input"
+                [[ -f "$fan_file" ]] && return 0
+            fi
+        fi
+    done
+    
+    # Fallback: check any hwmon for fan sensors
+    for hwmon in "$hwmon_dir"/*/; do
+        fan_file="${hwmon}fan1_input"
+        [[ -f "$fan_file" ]] && return 0
+    done
+    
+    return 1
+}
+
+read_fan_speed() {
+    # Try nct6686/nct6687 first (BC-250), then any hwmon with fan sensors
+    local hwmon_dir="/sys/class/hwmon"
+    local hwmon name_file fan_file
+    
+    # Check for nct6686/nct6687 specifically
+    for hwmon in "$hwmon_dir"/*/; do
+        name_file="${hwmon}name"
+        if [[ -f "$name_file" ]]; then
+            name=$(cat "$name_file" 2>/dev/null)
+            if [[ "$name" == "nct6686" || "$name" == "nct6687" ]]; then
+                # Read all fans, return highest non-zero value
+                local max_fan=0
+                local i=1
+                while [[ $i -le 8 ]]; do
+                    fan_file="${hwmon}fan${i}_input"
+                    if [[ -f "$fan_file" ]]; then
+                        local val
+                        val=$(cat "$fan_file" 2>/dev/null) || true
+                        if [[ -n "$val" && "$val" -gt "$max_fan" ]]; then
+                            max_fan=$val
+                        fi
+                    fi
+                    i=$((i + 1))
+                done
+                if [[ $max_fan -gt 0 ]]; then
+                    echo "$max_fan"
+                    return 0
+                fi
+            fi
+        fi
+    done
+    
+    # Fallback: check any hwmon for fan sensors
+    for hwmon in "$hwmon_dir"/*/; do
+        fan_file="${hwmon}fan1_input"
+        if [[ -f "$fan_file" ]]; then
+            local val
+            val=$(cat "$fan_file" 2>/dev/null) || true
+            if [[ -n "$val" && "$val" -gt 0 ]]; then
+                echo "$val"
+                return 0
+            fi
+        fi
+    done
+    
+    # No fan detected
+    return 1
+}
+
 # --- Per-core CPU frequency ---
 read_cpu_freq_per_core() {
     # Returns comma-separated frequencies for each core
@@ -575,6 +652,18 @@ list_gpu_clock_states() {
     fi
 }
 
+# Check for fan sensor
+if [[ "$LOG_FAN" == true ]]; then
+    if ! fan_sensor_exists; then
+        echo "Warning: No fan sensor detected (nct6686/nct6687). Fan data will be empty." >&2
+        echo "  To enable fan monitoring, install nct6687d driver:" >&2
+        echo "    git clone https://github.com/Fred78290/nct6687d.git" >&2
+        echo "    cd nct6687d && sudo make install" >&2
+        echo "  Then add to /etc/modprobe.d/sensors.conf:" >&2
+        echo "    options nct6687 force=true" >&2
+    fi
+fi
+
 # --- Output functions ---
 timestamp() {
     date '+%Y-%m-%dT%H:%M:%S%z'
@@ -598,6 +687,7 @@ emit_csv_header() {
             header+=",cpu_freq_mhz,cpu_temp_c,cpu_usage_pct,nvme_temp_c"
         fi
     fi
+    [[ "$LOG_FAN" == true ]] && header+=",fan_rpm"
     echo "$header"
 }
 
@@ -607,6 +697,7 @@ emit_csv() {
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
     local per_core_data="${13}"
+    local fan_rpm="${14}"
 
     local line="$ts"
     if [[ "$LOG_GPU" == true ]]; then
@@ -621,6 +712,7 @@ emit_csv() {
             line+=",${cpu_freq},${cpu_temp},${cpu_usage},${nvme_temp}"
         fi
     fi
+    [[ "$LOG_FAN" == true ]] && line+=",${fan_rpm}"
     echo "$line"
 }
 
@@ -642,6 +734,7 @@ emit_json() {
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
     local per_core_data="${13}"
+    local fan_rpm="${14}"
 
     printf '{"timestamp":"%s"' "$ts"
 
@@ -671,6 +764,8 @@ emit_json() {
         printf ',"cpu_usage_pct":%s' "$(json_val "$cpu_usage" num)"
         printf ',"nvme_temp_c":%s' "$(json_val "$nvme_temp" num)"
     fi
+
+    [[ "$LOG_FAN" == true ]] && printf ',"fan_rpm":%s' "$(json_val "$fan_rpm" num)"
 
     printf '}\n'
 }
@@ -924,6 +1019,7 @@ live_draw() {
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
+    local fan_rpm="${13}"
 
     printf '\033[2J\033[H'
 
@@ -972,6 +1068,11 @@ live_draw() {
         printf "  Temp: ${W}%6s${X} °C\n" "$nvme_temp"
     fi
 
+    if [[ "$LOG_FAN" == true && -n "$fan_rpm" ]]; then
+        printf "${N}Fan${X}\n"
+        printf "  Speed: ${W}%6s${X} RPM\n" "$fan_rpm"
+    fi
+
     printf '%0.s-' {1..60}
     echo
     printf "  ${D}Ctrl+C to exit${X}  ${W}sample #%-5s${X}\n" "$sample_count"
@@ -982,6 +1083,7 @@ watch_draw() {
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
+    local fan_rpm="${13}"
 
     local R=$'\033[1;31m'
     local G=$'\033[1;34m'
@@ -999,6 +1101,9 @@ watch_draw() {
     fi
     if [[ -n "$nvme_temp" ]]; then
         line+="${D}NVMe${X} ${nvme_temp}°C "
+    fi
+    if [[ "$LOG_FAN" == true && -n "$fan_rpm" ]]; then
+        line+="${D}Fan${X} ${fan_rpm}RPM "
     fi
 
     printf '\r\033[K%s' "$line"
@@ -1037,11 +1142,17 @@ while true; do
         nvme_temp=$(read_nvme_temp) || true
     fi
 
+    # Fan
+    fan_rpm=""
+    if [[ "$LOG_FAN" == true ]]; then
+        fan_rpm=$(read_fan_speed) || true
+    fi
+
     # Output
     if [[ "$WATCH" == true ]]; then
         watch_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                    "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
+                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm"
     elif [[ "$LIVE" == true ]]; then
         # Collect history for sparklines
         [[ -n "$gpu_temp" ]] && LIVE_GPU_TEMP_HIST+=("$gpu_temp")
@@ -1056,16 +1167,16 @@ while true; do
 
         live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                   "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
+                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm"
     else
         if [[ -n "$OUTPUT" ]]; then
             case "$FORMAT" in
                 csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" >&3 ;;
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" >&3 ;;
                 json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" >&3 ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" >&3 ;;
             esac
         fi
 
@@ -1073,10 +1184,10 @@ while true; do
             case "$FORMAT" in
                 csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" ;;
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" ;;
                 json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" ;;
             esac
         fi
     fi

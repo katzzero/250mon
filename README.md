@@ -25,6 +25,28 @@ sudo cp 250mon 250mon-draw 250mon-serve /usr/local/bin/
 sudo chmod +x /usr/local/bin/250mon /usr/local/bin/250mon-draw /usr/local/bin/250mon-serve
 ```
 
+### Fan Sensor Driver (Optional)
+
+The BC-250 requires a custom driver to expose fan speed sensors:
+
+```bash
+# Install development headers
+sudo pacman -S base-devel git linux-cachyos-headers
+
+# Clone and compile the driver
+git clone https://github.com/Fred78290/nct6687d.git
+cd nct6687d
+sudo make install
+
+# Configure kernel module
+echo 'options nct6687 force=true' | sudo tee /etc/modprobe.d/sensors.conf
+echo 'nct6687' | sudo tee /etc/modules-load.d/99-sensors.conf
+
+# Rebuild initramfs and reboot
+sudo mkinitcpio -P
+sudo reboot
+```
+
 ## Usage
 
 ```
@@ -89,6 +111,14 @@ Info:
 | `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
 | `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
 | `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
+
+### Fan
+
+| Column | Description | Source |
+|--------|-------------|--------|
+| `fan_rpm` | Fan speed (RPM) | nct6686/nct6687 hwmon |
+
+> **Note:** Fan monitoring requires the nct6687d driver. If not installed, `fan_rpm` will be empty and a warning will be shown.
 
 ## Examples
 
