@@ -197,9 +197,13 @@ def cli_plot(timestamps, columns, metrics, width):
             idx = max(0, min(idx, len(BLOCKS) - 1))
             blocks += BLOCKS[idx]
 
-        # Print label + chart
+        # Print label + chart with range, duration, median
         last = valid_vals[-1]
-        print(f"\033[1m{label:14s}\033[0m {blocks} {vmin:.0f}-{vmax:.0f}{unit} ({last:.1f})")
+        median_val = sorted(valid_vals)[len(valid_vals) // 2]
+        duration = (timestamps[-1] - timestamps[0]).total_seconds()
+        mins = int(duration) // 60
+        secs = int(duration) % 60
+        print(f"\033[1m{label:14s}\033[0m {blocks} {vmin:.0f}-{vmax:.0f}{unit}  {mins}m{secs:02d}s  med:{median_val:.1f}")
 
 
 def plot_metrics(timestamps, columns, metrics, title, output, width, height, dpi, show_grid):
