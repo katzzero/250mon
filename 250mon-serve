@@ -2,13 +2,26 @@
 """
 250mon-serve - WebSocket + HTTP server for 250mon state
 Streams /run/250mon/state.json to connected clients.
-  - WebSocket on port 25052 (default)
-  - HTTP GET / on port 25053 (default)
+
+Usage:
+  250mon-serve [mode] [options]
+
+Modes (or set in config.toml):
+  ws [port] [interval]        # WebSocket only
+  http [port] [interval]      # HTTP only
+  both [ws_port] [http_port] [interval]  # Both
+
+Config (~/.config/250mon/config.toml):
+  serve_mode = "ws"           # ws, http, or both
+  serve_ws_port = 25052
+  serve_http_port = 25053
+  serve_interval = 1.0
 """
 
 import asyncio
 import json
 import os
+import re
 import signal
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -22,6 +35,7 @@ except ImportError:
 
 STATE_DIR = "/run/250mon"
 STATE_FILE = os.path.join(STATE_DIR, "state.json")
+CONFIG_FILE = os.path.join(os.path.expanduser("~"), ".config", "250mon", "config.toml")
 DEFAULT_WS_PORT = 25052
 DEFAULT_HTTP_PORT = 25053
 DEFAULT_INTERVAL = 1.0
@@ -36,6 +50,27 @@ def read_state():
             return f.read().strip()
     except (FileNotFoundError, PermissionError):
         return json.dumps({"error": "state unavailable"})
+
+
+def load_config():
+    """Read config.toml, return dict of settings."""
+    config = {}
+    if not os.path.isfile(CONFIG_FILE):
+        return config
+    try:
+        with open(CONFIG_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or line.startswith("["):
+                    continue
+                m = re.match(r'^(\w+)\s*=\s*(.+)$', line)
+                if m:
+                    key = m.group(1)
+                    val = m.group(2).strip().strip('"').strip("'")
+                    config[key] = val
+    except Exception:
+        pass
+    return config
 
 
 # WebSocket handler
@@ -88,41 +123,102 @@ def shutdown(sig, frame):
     running = False
 
 
+def usage():
+    print("Usage: 250mon-serve [mode] [options]")
+    print()
+    print("Modes:")
+    print("  ws [port] [interval]              WebSocket only (default port 25052)")
+    print("  http [port] [interval]            HTTP only (default port 25053)")
+    print("  both [ws_port] [http_port] [interval]  Both servers")
+    print()
+    print("If no mode given, reads from config.toml (serve_mode).")
+    print()
+    print("Examples:")
+    print("  250mon-serve ws                   # WebSocket on :25052")
+    print("  250mon-serve http 8080            # HTTP on :8080")
+    print("  250mon-serve both 8080 8081       # WS :8080, HTTP :8081")
+    print()
+    print("Config (~/.config/250mon/config.toml):")
+    print('  serve_mode = "ws"                 # ws, http, or both')
+    print("  serve_ws_port = 25052")
+    print("  serve_http_port = 25053")
+    print("  serve_interval = 1.0")
+    sys.exit(1)
+
+
 def main():
+    global running
+
+    config = load_config()
+
+    # Defaults from config, CLI overrides
+    mode = sys.argv[1] if len(sys.argv) > 1 else config.get("serve_mode", "")
     ws_port = DEFAULT_WS_PORT
     http_port = DEFAULT_HTTP_PORT
     interval = DEFAULT_INTERVAL
 
-    if len(sys.argv) > 1:
-        try:
-            ws_port = int(sys.argv[1])
-        except ValueError:
-            pass
-    if len(sys.argv) > 2:
-        try:
-            http_port = int(sys.argv[2])
-        except ValueError:
-            pass
-    if len(sys.argv) > 3:
-        try:
-            interval = float(sys.argv[3])
-        except ValueError:
-            pass
+    # Apply config defaults
+    if "serve_ws_port" in config:
+        try: ws_port = int(config["serve_ws_port"])
+        except ValueError: pass
+    if "serve_http_port" in config:
+        try: http_port = int(config["serve_http_port"])
+        except ValueError: pass
+    if "serve_interval" in config:
+        try: interval = float(config["serve_interval"])
+        except ValueError: pass
 
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    # Start HTTP server in background thread
-    http_thread = Thread(target=start_http_server, args=(http_port,), daemon=True)
-    http_thread.start()
-    print(f"HTTP server on http://0.0.0.0:{http_port}")
-
-    async def serve():
+    # CLI args override config
+    if mode == "ws":
+        if len(sys.argv) > 2:
+            try: ws_port = int(sys.argv[2])
+            except ValueError: pass
+        if len(sys.argv) > 3:
+            try: interval = float(sys.argv[3])
+            except ValueError: pass
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
         print(f"WebSocket server on ws://0.0.0.0:{ws_port}")
-        async with websockets.serve(ws_handler, "0.0.0.0", ws_port):
-            await broadcaster(interval)
+        async def serve():
+            async with websockets.serve(ws_handler, "0.0.0.0", ws_port):
+                await broadcaster(interval)
+        asyncio.run(serve())
 
-    asyncio.run(serve())
+    elif mode == "http":
+        if len(sys.argv) > 2:
+            try: http_port = int(sys.argv[2])
+            except ValueError: pass
+        if len(sys.argv) > 3:
+            try: interval = float(sys.argv[3])
+            except ValueError: pass
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
+        print(f"HTTP server on http://0.0.0.0:{http_port}")
+        start_http_server(http_port)
+
+    elif mode == "both":
+        if len(sys.argv) > 2:
+            try: ws_port = int(sys.argv[2])
+            except ValueError: pass
+        if len(sys.argv) > 3:
+            try: http_port = int(sys.argv[3])
+            except ValueError: pass
+        if len(sys.argv) > 4:
+            try: interval = float(sys.argv[4])
+            except ValueError: pass
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
+        http_thread = Thread(target=start_http_server, args=(http_port,), daemon=True)
+        http_thread.start()
+        print(f"HTTP server on http://0.0.0.0:{http_port}")
+        print(f"WebSocket server on ws://0.0.0.0:{ws_port}")
+        async def serve():
+            async with websockets.serve(ws_handler, "0.0.0.0", ws_port):
+                await broadcaster(interval)
+        asyncio.run(serve())
+
+    else:
+        usage()
 
 
 if __name__ == "__main__":

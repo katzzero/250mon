@@ -90,11 +90,14 @@ Info:
 ### 250mon-serve
 
 ```
-250mon-serve [WS_PORT] [HTTP_PORT] [INTERVAL]
+250mon-serve [mode] [options]
 
-  WS_PORT      WebSocket port (default: 25052)
-  HTTP_PORT    HTTP REST port (default: 25053)
-  INTERVAL     Broadcast interval in seconds (default: 1.0)
+Modes:
+  ws [port] [interval]           WebSocket only
+  http [port] [interval]         HTTP only
+  both [ws_port] [http_port]     Both servers
+
+Defaults from config.toml if no mode given.
 ```
 
 ## Metrics
@@ -259,10 +262,19 @@ cat /run/250mon/gpu_temp_max    # Read session maximum
 Stream live state to clients (web dashboards, scripts, etc.):
 
 ```bash
-250mon-serve                        # WS:25052, HTTP:25053
-250mon-serve 8080                   # Custom WS port
-250mon-serve 8080 8081              # Custom WS + HTTP ports
-250mon-serve 8080 8081 0.5          # Custom interval (seconds)
+250mon-serve ws                          # WebSocket only
+250mon-serve http                        # HTTP only
+250mon-serve both                        # Both servers
+250mon-serve both 8080 8081              # Custom ports
+250mon-serve ws 8080 0.5                 # Custom port + interval
+```
+
+If no mode is given, reads from `config.toml`:
+```toml
+serve_mode = "ws"        # ws, http, or both
+serve_ws_port = 25052
+serve_http_port = 25053
+serve_interval = 1.0
 ```
 
 | Protocol | Default Port | Endpoint |
