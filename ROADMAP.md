@@ -29,8 +29,8 @@
 - [x] `-w` / `--watch` — Single-line terminal display (live dashboard)
 - [x] `--service` — Run as daemon with state files in /run/250mon/
 - [x] `--serve` — WebSocket server streaming state.json on port 25052
-- [ ] Per-core CPU frequency logging (`--per-core`)
-- [ ] GPU clock state listing (`--list-states`)
+- [x] Per-core CPU frequency logging (`--per-core`)
+- [x] GPU clock state listing (`--list-states`)
 
 ## v0.4.0 — Advanced
 

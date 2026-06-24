@@ -53,6 +53,10 @@ Plotting:
   --plot              Generate plot image after logging (default: 30 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
 
+Advanced:
+  --per-core          Log per-core CPU frequencies instead of average
+  --list-states       List GPU clock states and exit
+
 Service:
   --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
   --serve [PORT]      Start WebSocket server (default: 25052)
@@ -71,7 +75,6 @@ Info:
 | `gpu_freq_mhz` | GPU shader clock (MHz) | `pp_dpm_sclk` |
 | `gpu_voltage_mv` | GPU core voltage (mV) | `pp_od_clk_voltage` |
 | `gpu_temp_c` | GPU temperature (°C) | hwmon/amdgpu |
-| `gpu_load_pct` | GPU busy % (null if unsupported) | `gpu_busy_percent` |
 | `gpu_mem_clock_mhz` | Memory clock (MHz) | `pp_dpm_mclk` |
 | `gpu_power_w` | GPU power draw (W) | hwmon power1_average |
 | `gpu_vram_used_mib` | VRAM used (MiB) | `mem_info_vram_used` |
@@ -82,11 +85,10 @@ Info:
 | Column | Description | Source |
 |--------|-------------|--------|
 | `cpu_freq_mhz` | Average CPU frequency (MHz) | `/proc/cpuinfo` |
+| `cpu0_freq_mhz` .. `cpuN_freq_mhz` | Per-core frequency (with `--per-core`) | `/proc/cpuinfo` |
 | `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
 | `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
-| `cpu_power_w` | CPU power draw (W) | RAPL or k10temp (null if unavailable) |
 | `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
-| `fan_rpm` | Fan speed (RPM) | hwmon (null if unavailable) |
 
 ## Examples
 
@@ -117,6 +119,12 @@ Info:
 
 # Rotate logs at 10MB, keep 3 backups
 250mon --max-size 10M --rotate 3
+
+# Log per-core CPU frequencies
+250mon --per-core -c 10
+
+# List GPU clock states
+250mon --list-states
 
 # Run as background daemon
 250mon --service

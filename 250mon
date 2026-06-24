@@ -31,6 +31,8 @@ Options:
   --plot              Generate plot after logging (default: 30 samples)
   --draw              Print ASCII chart after logging (default: 60 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
+  --per-core          Log per-core CPU frequencies instead of average
+  --list-states       List GPU clock states and exit
   --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
   --serve [PORT]      Start WebSocket server (default: 25052)
   -h, --help          Show this help message
@@ -40,7 +42,6 @@ GPU Metrics:
   gpu_freq_mhz        GPU shader clock (MHz)
   gpu_voltage_mv      GPU core voltage (mV)
   gpu_temp_c          GPU temperature (°C)
-  gpu_load_pct        GPU busy percentage (null if unsupported)
   gpu_mem_clock_mhz   GPU memory clock (MHz)
   gpu_power_w         GPU power draw (W)
   gpu_vram_used_mib   VRAM used (MiB)
@@ -50,11 +51,7 @@ CPU Metrics:
   cpu_freq_mhz        Average CPU frequency (MHz)
   cpu_temp_c          CPU temperature (°C, from k10temp)
   cpu_usage_pct       Aggregate CPU usage percentage
-  cpu_power_w         CPU power draw (W, from RAPL if available)
   nvme_temp_c         NVMe drive temperature (°C)
-
-Other Metrics:
-  fan_rpm             Fan speed (RPM, if available)
 
 Examples:
   250mon                              # Log to ~/250mon-YYYYMMDD-HHMMSS.csv
@@ -107,6 +104,8 @@ CONFIG_FILE="${HOME}/.config/250mon/config.toml"
 STATE_DIR="/run/250mon"
 PID_FILE="${STATE_DIR}/250mon.pid"
 SERVICE_DAEMON=false
+PER_CORE=false
+LIST_STATES=false
 
 # GPU sysfs base path
 GPU_PATH=""
@@ -271,6 +270,14 @@ while [[ $# -gt 0 ]]; do
                 shift
             fi
             ;;
+        --per-core)
+            PER_CORE=true
+            shift
+            ;;
+        --list-states)
+            LIST_STATES=true
+            shift
+            ;;
         -h|--help)
             usage
             exit 0
@@ -410,15 +417,6 @@ read_gpu_temp() {
     done
 }
 
-read_gpu_load() {
-    local busy_file="$GPU_PATH/gpu_busy_percent"
-    if [[ -f "$busy_file" ]]; then
-        local val
-        val=$(cat "$busy_file" 2>/dev/null) || return 0
-        echo "$val" | tr -d '[:space:]'
-    fi
-}
-
 read_gpu_mem_clock() {
     grep '\*' "$GPU_PATH/pp_dpm_mclk" 2>/dev/null | head -1 | sed -n 's/^[0-9]*: \([0-9]*\)Mhz.*/\1/p'
 }
@@ -534,55 +532,47 @@ read_nvme_temp() {
     done
 }
 
-# --- CPU power reading (RAPL) ---
-read_cpu_power() {
-    # Try RAPL via /sys/class/powercap/intel-rapl:0
-    local rapl_file="/sys/class/powercap/intel-rapl:0/energy_uj"
-    if [[ -f "$rapl_file" ]]; then
-        local raw
-        raw=$(cat "$rapl_file" 2>/dev/null) || return 0
-        if [[ -n "$raw" && "$raw" -gt 0 ]]; then
-            awk "BEGIN {printf \"%.1f\", $raw / 1000000}"
-            return 0
-        fi
-    fi
-    # Fallback: try k10temp power (some AMD systems)
-    local hwmon_dir="/sys/class/hwmon"
-    local hwmon name_file power_file
-    for hwmon in "$hwmon_dir"/*/; do
-        name_file="${hwmon}name"
-        if [[ -f "$name_file" ]]; then
-            name=$(cat "$name_file" 2>/dev/null)
-            if [[ "$name" == "k10temp" ]]; then
-                power_file="${hwmon}power1_average"
-                if [[ -f "$power_file" ]]; then
-                    local raw
-                    raw=$(cat "$power_file" 2>/dev/null) || return 0
-                    if [[ -n "$raw" && "$raw" -gt 0 ]]; then
-                        awk "BEGIN {printf \"%.1f\", $raw / 1000000}"
-                        return 0
-                    fi
-                fi
-            fi
-        fi
-    done
+# --- Per-core CPU frequency ---
+read_cpu_freq_per_core() {
+    # Returns comma-separated frequencies for each core
+    awk '/^processor/ {core=$3} /^cpu MHz/ {printf "%s%.0f", (core>0 ? "," : ""), $4} END {print ""}' /proc/cpuinfo 2>/dev/null
 }
 
-# --- Fan speed reading ---
-read_fan_speed() {
-    local hwmon_dir="/sys/class/hwmon"
-    local hwmon fan_file
-    for hwmon in "$hwmon_dir"/*/; do
-        fan_file="${hwmon}fan1_input"
-        if [[ -f "$fan_file" ]]; then
-            local raw
-            raw=$(cat "$fan_file" 2>/dev/null) || return 0
-            if [[ -n "$raw" && "$raw" -gt 0 ]]; then
-                echo "$raw"
-                return 0
-            fi
-        fi
-    done
+# --- GPU clock states ---
+list_gpu_clock_states() {
+    local GPU_PATH=""
+    local device_path="/sys/class/drm/card0/device"
+    if [[ -d "$device_path" ]]; then
+        GPU_PATH="$device_path"
+    fi
+
+    if [[ -z "$GPU_PATH" ]]; then
+        echo "Error: Cannot find GPU sysfs path" >&2
+        return 1
+    fi
+
+    echo "=== GPU Clock States (pp_dpm_sclk) ==="
+    if [[ -f "$GPU_PATH/pp_dpm_sclk" ]]; then
+        cat "$GPU_PATH/pp_dpm_sclk"
+    else
+        echo "Not available"
+    fi
+    echo
+
+    echo "=== GPU Memory States (pp_dpm_mclk) ==="
+    if [[ -f "$GPU_PATH/pp_dpm_mclk" ]]; then
+        cat "$GPU_PATH/pp_dpm_mclk"
+    else
+        echo "Not available"
+    fi
+    echo
+
+    echo "=== GPU Voltage States (pp_od_clk_voltage) ==="
+    if [[ -f "$GPU_PATH/pp_od_clk_voltage" ]]; then
+        cat "$GPU_PATH/pp_od_clk_voltage"
+    else
+        echo "Not available"
+    fi
 }
 
 # --- Output functions ---
@@ -592,27 +582,45 @@ timestamp() {
 
 emit_csv_header() {
     local header="timestamp"
-    [[ "$LOG_GPU" == true ]] && header+=",gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_load_pct,gpu_mem_clock_mhz,gpu_power_w,gpu_vram_used_mib,gpu_vram_total_mib"
-    [[ "$LOG_CPU" == true ]] && header+=",cpu_freq_mhz,cpu_temp_c,cpu_usage_pct,cpu_power_w,nvme_temp_c"
-    header+=",fan_rpm"
+    [[ "$LOG_GPU" == true ]] && header+=",gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_mem_clock_mhz,gpu_power_w,gpu_vram_used_mib,gpu_vram_total_mib"
+    if [[ "$LOG_CPU" == true ]]; then
+        if [[ "$PER_CORE" == true ]]; then
+            # Get number of cores
+            local ncores
+            ncores=$(awk '/^processor/ {n=$3} END {print n+1}' /proc/cpuinfo 2>/dev/null || echo 12)
+            local i=0
+            while [[ $i -lt $ncores ]]; do
+                header+=",cpu${i}_freq_mhz"
+                i=$((i + 1))
+            done
+            header+=",cpu_temp_c,cpu_usage_pct,nvme_temp_c"
+        else
+            header+=",cpu_freq_mhz,cpu_temp_c,cpu_usage_pct,nvme_temp_c"
+        fi
+    fi
     echo "$header"
 }
 
 emit_csv() {
     local ts="$1"
-    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
-    local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
-    local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" cpu_power="${13}" nvme_temp="${14}" fan_rpm="${15}"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
+    local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
+    local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
+    local per_core_data="${13}"
 
     local line="$ts"
     if [[ "$LOG_GPU" == true ]]; then
-        line+=",${gpu_freq},${gpu_volt},${gpu_temp},${gpu_load},${gpu_mem}"
+        line+=",${gpu_freq},${gpu_volt},${gpu_temp},${gpu_mem}"
         line+=",${gpu_power},${gpu_vram_used},${gpu_vram_total}"
     fi
     if [[ "$LOG_CPU" == true ]]; then
-        line+=",${cpu_freq},${cpu_temp},${cpu_usage},${cpu_power},${nvme_temp}"
+        if [[ "$PER_CORE" == true ]]; then
+            line+=",${per_core_data}"
+            line+=",${cpu_temp},${cpu_usage},${nvme_temp}"
+        else
+            line+=",${cpu_freq},${cpu_temp},${cpu_usage},${nvme_temp}"
+        fi
     fi
-    line+=",${fan_rpm}"
     echo "$line"
 }
 
@@ -630,9 +638,10 @@ json_val() {
 
 emit_json() {
     local ts="$1"
-    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
-    local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
-    local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" cpu_power="${13}" nvme_temp="${14}" fan_rpm="${15}"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
+    local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
+    local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
+    local per_core_data="${13}"
 
     printf '{"timestamp":"%s"' "$ts"
 
@@ -640,7 +649,6 @@ emit_json() {
         printf ',"gpu_freq_mhz":%s' "$(json_val "$gpu_freq" num)"
         printf ',"gpu_voltage_mv":%s' "$(json_val "$gpu_volt" num)"
         printf ',"gpu_temp_c":%s' "$(json_val "$gpu_temp" num)"
-        printf ',"gpu_load_pct":%s' "$(json_val "$gpu_load" num)"
         printf ',"gpu_mem_clock_mhz":%s' "$(json_val "$gpu_mem" num)"
         printf ',"gpu_power_w":%s' "$(json_val "$gpu_power" num)"
         printf ',"gpu_vram_used_mib":%s' "$(json_val "$gpu_vram_used" num)"
@@ -648,22 +656,30 @@ emit_json() {
     fi
 
     if [[ "$LOG_CPU" == true ]]; then
-        printf ',"cpu_freq_mhz":%s' "$(json_val "$cpu_freq" num)"
+        if [[ "$PER_CORE" == true ]]; then
+            # per_core_data is comma-separated freqs: "freq0,freq1,..."
+            local IFS=','
+            local core_idx=0
+            for freq in $per_core_data; do
+                printf ',"cpu%d_freq_mhz":%s' "$core_idx" "$(json_val "$freq" num)"
+                core_idx=$((core_idx + 1))
+            done
+        else
+            printf ',"cpu_freq_mhz":%s' "$(json_val "$cpu_freq" num)"
+        fi
         printf ',"cpu_temp_c":%s' "$(json_val "$cpu_temp" num)"
         printf ',"cpu_usage_pct":%s' "$(json_val "$cpu_usage" num)"
-        printf ',"cpu_power_w":%s' "$(json_val "$cpu_power" num)"
         printf ',"nvme_temp_c":%s' "$(json_val "$nvme_temp" num)"
     fi
 
-    printf ',"fan_rpm":%s' "$(json_val "$fan_rpm" num)"
     printf '}\n'
 }
 
 # --- Service functions ---
 write_state() {
-    local gpu_freq="$1" gpu_volt="$2" gpu_temp="$3" gpu_load="$4" gpu_mem="$5"
-    local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
-    local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" cpu_power="${12}" nvme_temp="${13}" fan_rpm="${14}"
+    local gpu_freq="$1" gpu_volt="$2" gpu_temp="$3" gpu_mem="$4"
+    local gpu_power="$5" gpu_vram_used="$6" gpu_vram_total="$7"
+    local cpu_freq="$8" cpu_temp="$9" cpu_usage="${10}" nvme_temp="${11}"
 
     [[ ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR"
 
@@ -671,7 +687,6 @@ write_state() {
     [[ -n "$gpu_freq" ]] && echo "$gpu_freq" > "${STATE_DIR}/gpu_freq"
     [[ -n "$gpu_volt" ]] && echo "$gpu_volt" > "${STATE_DIR}/gpu_voltage"
     [[ -n "$gpu_temp" ]] && echo "$gpu_temp" > "${STATE_DIR}/gpu_temp"
-    [[ -n "$gpu_load" ]] && echo "$gpu_load" > "${STATE_DIR}/gpu_load"
     [[ -n "$gpu_mem" ]] && echo "$gpu_mem" > "${STATE_DIR}/gpu_mem_clock"
     [[ -n "$gpu_power" ]] && echo "$gpu_power" > "${STATE_DIR}/gpu_power"
     [[ -n "$gpu_vram_used" ]] && echo "$gpu_vram_used" > "${STATE_DIR}/gpu_vram_used"
@@ -679,16 +694,13 @@ write_state() {
     [[ -n "$cpu_freq" ]] && echo "$cpu_freq" > "${STATE_DIR}/cpu_freq"
     [[ -n "$cpu_temp" ]] && echo "$cpu_temp" > "${STATE_DIR}/cpu_temp"
     [[ -n "$cpu_usage" ]] && echo "$cpu_usage" > "${STATE_DIR}/cpu_usage"
-    [[ -n "$cpu_power" ]] && echo "$cpu_power" > "${STATE_DIR}/cpu_power"
     [[ -n "$nvme_temp" ]] && echo "$nvme_temp" > "${STATE_DIR}/nvme_temp"
-    [[ -n "$fan_rpm" ]] && echo "$fan_rpm" > "${STATE_DIR}/fan_rpm"
 
     # JSON state file
-    printf '{"gpu_freq":%s,"gpu_voltage":%s,"gpu_temp":%s,"gpu_load":%s,"gpu_mem_clock":%s,"gpu_power":%s,"gpu_vram_used":%s,"gpu_vram_total":%s,"cpu_freq":%s,"cpu_temp":%s,"cpu_usage":%s,"cpu_power":%s,"nvme_temp":%s,"fan_rpm":%s}\n' \
+    printf '{"gpu_freq":%s,"gpu_voltage":%s,"gpu_temp":%s,"gpu_mem_clock":%s,"gpu_power":%s,"gpu_vram_used":%s,"gpu_vram_total":%s,"cpu_freq":%s,"cpu_temp":%s,"cpu_usage":%s,"nvme_temp":%s}\n' \
         "$(json_val "${gpu_freq}" num)" \
         "$(json_val "${gpu_volt}" num)" \
         "$(json_val "${gpu_temp}" num)" \
-        "$(json_val "${gpu_load}" num)" \
         "$(json_val "${gpu_mem}" num)" \
         "$(json_val "${gpu_power}" num)" \
         "$(json_val "${gpu_vram_used}" num)" \
@@ -696,9 +708,7 @@ write_state() {
         "$(json_val "${cpu_freq}" num)" \
         "$(json_val "${cpu_temp}" num)" \
         "$(json_val "${cpu_usage}" num)" \
-        "$(json_val "${cpu_power}" num)" \
-        "$(json_val "${nvme_temp}" num)" \
-        "$(json_val "${fan_rpm}" num)" > "${STATE_DIR}/state.json"
+        "$(json_val "${nvme_temp}" num)" > "${STATE_DIR}/state.json"
 }
 
 service_install() {
@@ -838,6 +848,12 @@ if [[ "$SERVICE" == true && "$SERVICE_DAEMON" == false ]]; then
     exit 0
 fi
 
+# --- List GPU states and exit ---
+if [[ "$LIST_STATES" == true ]]; then
+    list_gpu_clock_states
+    exit 0
+fi
+
 # Write header for CSV
 if [[ "$FORMAT" == "csv" && "$LIVE" == false && "$WATCH" == false ]]; then
     if [[ -n "$OUTPUT" ]]; then
@@ -905,9 +921,9 @@ live_sparkline() {
 
 live_draw() {
     local ts="$1"
-    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
-    local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
-    local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" nvme_temp="${13}"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
+    local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
+    local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
 
     printf '\033[2J\033[H'
 
@@ -963,9 +979,9 @@ live_draw() {
 
 watch_draw() {
     local ts="$1"
-    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
-    local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
-    local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" nvme_temp="${13}"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
+    local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
+    local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
 
     local R=$'\033[1;31m'
     local G=$'\033[1;34m'
@@ -994,13 +1010,12 @@ while true; do
     ts=$(timestamp)
 
     # GPU
-    gpu_freq="" gpu_volt="" gpu_temp="" gpu_load="" gpu_mem=""
+    gpu_freq="" gpu_volt="" gpu_temp="" gpu_mem=""
     gpu_power="" gpu_vram_used="" gpu_vram_total=""
     if [[ "$LOG_GPU" == true ]]; then
         gpu_freq=$(read_gpu_freq) || true
         gpu_volt=$(read_gpu_voltage) || true
         gpu_temp=$(read_gpu_temp) || true
-        gpu_load=$(read_gpu_load) || true
         gpu_mem=$(read_gpu_mem_clock) || true
         gpu_power=$(read_gpu_power) || true
         gpu_vram_used=$(read_gpu_vram_used) || true
@@ -1008,23 +1023,25 @@ while true; do
     fi
 
     # CPU
-    cpu_freq="" cpu_temp="" cpu_usage="" cpu_power="" nvme_temp=""
+    cpu_freq="" cpu_temp="" cpu_usage="" nvme_temp="" per_core_data=""
     if [[ "$LOG_CPU" == true ]]; then
-        cpu_freq=$(read_cpu_freq) || true
+        if [[ "$PER_CORE" == true ]]; then
+            per_core_data=$(read_cpu_freq_per_core) || true
+            # Calculate average for watch/live display
+            cpu_freq=$(echo "$per_core_data" | awk -F',' '{sum=0; for(i=1;i<=NF;i++) sum+=$i; if(NF>0) printf "%.0f", sum/NF; else print ""}')
+        else
+            cpu_freq=$(read_cpu_freq) || true
+        fi
         cpu_temp=$(read_cpu_temp) || true
         cpu_usage=$(read_cpu_usage) || true
-        cpu_power=$(read_cpu_power) || true
         nvme_temp=$(read_nvme_temp) || true
     fi
 
-    # Fan
-    fan_rpm=$(read_fan_speed) || true
-
     # Output
     if [[ "$WATCH" == true ]]; then
-        watch_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+        watch_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                    "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm"
+                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
     elif [[ "$LIVE" == true ]]; then
         # Collect history for sparklines
         [[ -n "$gpu_temp" ]] && LIVE_GPU_TEMP_HIST+=("$gpu_temp")
@@ -1037,38 +1054,38 @@ while true; do
         [[ ${#LIVE_CPU_TEMP_HIST[@]} -gt $LIVE_MAX_HIST ]] && LIVE_CPU_TEMP_HIST=("${LIVE_CPU_TEMP_HIST[@]:1}")
         [[ ${#LIVE_CPU_USAGE_HIST[@]} -gt $LIVE_MAX_HIST ]] && LIVE_CPU_USAGE_HIST=("${LIVE_CPU_USAGE_HIST[@]:1}")
 
-        live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+        live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                   "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm"
+                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
     else
         if [[ -n "$OUTPUT" ]]; then
             case "$FORMAT" in
-                csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm" >&3 ;;
-                json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" >&3 ;;
+                json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm" >&3 ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" >&3 ;;
             esac
         fi
 
         if [[ "$QUIET" == false ]]; then
             case "$FORMAT" in
-                csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm" ;;
-                json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" ;;
+                json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm" ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" ;;
             esac
         fi
     fi
 
     # Write state files for --service mode
     if [[ "$SERVICE" == true ]]; then
-        write_state "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+        write_state "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                     "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$cpu_power" "$nvme_temp" "$fan_rpm"
+                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
     fi
 
     sample_count=$((sample_count + 1))
