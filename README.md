@@ -1,18 +1,29 @@
 # 250mon
 
-Lightweight bash logger for AMD Cyan Skillfish (BC-250) GPU and CPU metrics.
+Lightweight hardware monitor for AMD Cyan Skillfish (BC-250) GPU and CPU.
 
-Reads frequency, voltage, temperature, load, and usage from sysfs/procfs and outputs in CSV or JSON format.
+Reads frequency, voltage, temperature, load, power, and usage from sysfs/procfs. Outputs CSV, JSON, live dashboards, WebSocket streams, and plots.
 
 > Tested on CachyOS (Arch-based) with AMD BC-250 APU.
 
 ## Dependencies
 
-- `bash`
-- `awk`, `grep`, `sed`
-- `date`, `sleep`
+**250mon** (core):
+- `bash`, `awk`, `grep`, `sed`, `date`, `sleep`
+- No external packages required
 
-No external packages required.
+**250mon-draw** (plotting):
+- `python3`, `matplotlib`
+
+**250mon-serve** (WebSocket):
+- `python3`, `websockets`
+
+## Install
+
+```bash
+sudo cp 250mon 250mon-draw 250mon-serve /usr/local/bin/
+sudo chmod +x /usr/local/bin/250mon /usr/local/bin/250mon-draw /usr/local/bin/250mon-serve
+```
 
 ## Usage
 
@@ -23,7 +34,7 @@ Component selection (default: both GPU and CPU):
   --gpu               Log GPU metrics only
   --cpu               Log CPU metrics only
 
-Options:
+Logging:
   -i, --interval MS   Sampling interval in milliseconds (default: 1000)
   -f, --format FMT    Output format: csv or json (default: csv)
   -o, --output FILE   Log to file (default: ~/250mon-YYYYMMDD-HHMMSS.<ext>)
@@ -31,9 +42,23 @@ Options:
   -c, --count N       Number of samples then exit (default: infinite)
   --max-size SIZE     Rotate log at size limit (e.g., 10M, 500K, 1G)
   --rotate N          Keep max N rotated files (default: 5)
+
+Live display:
   -w, --watch         Single-line live display (Ctrl+C to exit)
+  --live              Full-screen live dashboard (Ctrl+C to exit)
+  --spark             Show sparklines in live dashboard (--live only)
+
+Plotting:
+  --draw              Print ASCII chart after logging (default: 60 samples)
+  --plot              Generate plot image after logging (default: 30 samples)
+  --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
+
+Service:
+  --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
   --serve [PORT]      Start WebSocket server (default: 25052)
-  -h, --help          Show help message
+
+Info:
+  -h, --help          Show this help message
   -v, --version       Show version
 ```
 
@@ -43,19 +68,23 @@ Options:
 
 | Column | Description | Source |
 |--------|-------------|--------|
-| `gpu_freq_mhz` | GPU shader clock | `pp_dpm_sclk` |
-| `gpu_voltage_mv` | GPU core voltage | `pp_od_clk_voltage` |
-| `gpu_temp_c` | GPU temperature | `hwmon/amdgpu` |
-| `gpu_load_pct` | GPU busy % | `gpu_busy_percent` |
-| `gpu_mem_clock_mhz` | Memory clock | `pp_dpm_mclk` |
+| `gpu_freq_mhz` | GPU shader clock (MHz) | `pp_dpm_sclk` |
+| `gpu_voltage_mv` | GPU core voltage (mV) | `pp_od_clk_voltage` |
+| `gpu_temp_c` | GPU temperature (°C) | hwmon/amdgpu |
+| `gpu_load_pct` | GPU busy % (null if unsupported) | `gpu_busy_percent` |
+| `gpu_mem_clock_mhz` | Memory clock (MHz) | `pp_dpm_mclk` |
+| `gpu_power_w` | GPU power draw (W) | hwmon power1_average |
+| `gpu_vram_used_mib` | VRAM used (MiB) | `mem_info_vram_used` |
+| `gpu_vram_total_mib` | VRAM total (MiB) | `mem_info_vram_total` |
 
 ### CPU
 
 | Column | Description | Source |
 |--------|-------------|--------|
-| `cpu_freq_mhz` | Average CPU frequency | `/proc/cpuinfo` |
-| `cpu_temp_c` | CPU temperature | `k10temp` hwmon |
-| `cpu_usage_pct` | Aggregate CPU usage | `/proc/stat` |
+| `cpu_freq_mhz` | Average CPU frequency (MHz) | `/proc/cpuinfo` |
+| `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
+| `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
+| `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
 
 ## Examples
 
@@ -63,7 +92,7 @@ Options:
 # Log to ~/250mon-YYYYMMDD-HHMMSS.csv
 250mon
 
-# GPU only, 100ms interval, JSON (saves to ~/250mon-YYYYMMDD-HHMMSS.jsonl)
+# GPU only, 100ms interval, JSON
 250mon --gpu -i 100 -f json
 
 # CPU only, 500ms, 60 samples
@@ -72,42 +101,29 @@ Options:
 # Custom output file, quiet
 250mon -i 2000 -o hw.csv -q
 
-# Rotate logs at 10MB, keep 3 backups
-250mon --max-size 10M --rotate 3
-
 # Single-line live display
 250mon --watch
 
-# Run as background daemon (writes state to /run/250mon/)
+# Full-screen dashboard with sparklines
+250mon --live --spark
+
+# Log 30 samples then ASCII chart
+250mon --draw -c 30
+
+# Log 50 samples then save plot
+250mon --plot -c 50
+
+# Rotate logs at 10MB, keep 3 backups
+250mon --max-size 10M --rotate 3
+
+# Run as background daemon
 250mon --service
 
 # Install systemd service
 250mon --service install
 
-# Stop service
-250mon --service stop
-```
-
-## CSV Output
-
-```csv
-timestamp,gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_load_pct,gpu_mem_clock_mhz,cpu_freq_mhz,cpu_temp_c,cpu_usage_pct
-2026-06-24T12:00:01-0300,350,699,52.0,,450,3592,59.8,36.9
-```
-
-## JSON Output
-
-```json
-{"timestamp":"2026-06-24T12:00:01-0300","gpu_freq_mhz":350,"gpu_voltage_mv":699,"gpu_temp_c":52.0,"gpu_load_pct":null,"gpu_mem_clock_mhz":450,"cpu_freq_mhz":3592,"cpu_temp_c":59.8,"cpu_usage_pct":36.9}
-```
-
-> Note: `gpu_load_pct` is `null` when `gpu_busy_percent` is not supported by the driver.
-
-## Install
-
-```bash
-sudo cp 250mon /usr/local/bin/
-sudo chmod +x /usr/local/bin/250mon
+# Start WebSocket server
+250mon --serve
 ```
 
 ## Config File
@@ -127,31 +143,18 @@ CLI flags override config file values.
 
 ## Service Mode
 
-Run 250mon as a background daemon that writes live state to `/run/250mon/`:
+Run 250mon as a background daemon writing live state to `/run/250mon/`:
 
 ```bash
-# Start as daemon
-250mon --service
-
-# Install as systemd service (auto-start on boot)
-250mon --service install
-
-# Manage service
-250mon --service stop
-250mon --service start
-250mon --service restart
-250mon --service uninstall
-
-# Start WebSocket server on port 25052
-250mon --serve
-
-# Start WebSocket server on custom port
-250mon --serve 8080
+250mon --service                # Start as daemon
+250mon --service install        # Install systemd service (auto-start on boot)
+250mon --service uninstall      # Remove service
+250mon --service start          # Start service
+250mon --service stop           # Stop service
+250mon --service restart        # Restart service
 ```
 
 ### State files
-
-The daemon writes to `/run/250mon/`:
 
 | File | Description |
 |------|-------------|
@@ -168,39 +171,31 @@ The daemon writes to `/run/250mon/`:
 | `cpu_usage` | CPU usage (%) |
 | `nvme_temp` | NVMe temperature (°C) |
 
-### Reading state
-
 ```bash
-# Read JSON state
-cat /run/250mon/state.json
-
-# Read individual metric
-cat /run/250mon/gpu_temp
+cat /run/250mon/state.json      # Read all state
+cat /run/250mon/gpu_temp        # Read individual metric
 ```
-
-## License
-
-MIT
 
 ## WebSocket Server
 
-Start a WebSocket server to stream live state to clients (e.g., web dashboards):
+Stream live state to clients (web dashboards, scripts, etc.):
 
 ```bash
 250mon --serve          # Default port 25052
 250mon --serve 8080     # Custom port
 ```
 
-The server streams `state.json` to all connected clients every second.
+Streams `state.json` to all connected clients every second.
 
-### Dependencies
+Requires: `python3`, `websockets` module (`pip install websockets`)
 
-- Python 3
-- `websockets` module (`pip install websockets`)
-
-### Client connection
+### Client example
 
 ```javascript
 const ws = new WebSocket("ws://localhost:25052");
 ws.onmessage = (e) => console.log(JSON.parse(e.data));
 ```
+
+## License
+
+MIT
