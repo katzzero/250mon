@@ -32,6 +32,7 @@ Options:
   --max-size SIZE     Rotate log at size limit (e.g., 10M, 500K, 1G)
   --rotate N          Keep max N rotated files (default: 5)
   -w, --watch         Single-line live display (Ctrl+C to exit)
+  --serve [PORT]      Start WebSocket server (default: 25052)
   -h, --help          Show help message
   -v, --version       Show version
 ```
@@ -140,6 +141,12 @@ Run 250mon as a background daemon that writes live state to `/run/250mon/`:
 250mon --service start
 250mon --service restart
 250mon --service uninstall
+
+# Start WebSocket server on port 25052
+250mon --serve
+
+# Start WebSocket server on custom port
+250mon --serve 8080
 ```
 
 ### State files
@@ -174,3 +181,26 @@ cat /run/250mon/gpu_temp
 ## License
 
 MIT
+
+## WebSocket Server
+
+Start a WebSocket server to stream live state to clients (e.g., web dashboards):
+
+```bash
+250mon --serve          # Default port 25052
+250mon --serve 8080     # Custom port
+```
+
+The server streams `state.json` to all connected clients every second.
+
+### Dependencies
+
+- Python 3
+- `websockets` module (`pip install websockets`)
+
+### Client connection
+
+```javascript
+const ws = new WebSocket("ws://localhost:25052");
+ws.onmessage = (e) => console.log(JSON.parse(e.data));
+```

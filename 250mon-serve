@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+"""
+250mon-serve - WebSocket server for 250mon state
+Streams /run/250mon/state.json to connected clients on port 25052.
+"""
+
+import asyncio
+import json
+import os
+import signal
+import sys
+
+try:
+    import websockets
+except ImportError:
+    print("Error: websockets module not found. Install with: pip install websockets", file=sys.stderr)
+    sys.exit(1)
+
+STATE_DIR = "/run/250mon"
+STATE_FILE = os.path.join(STATE_DIR, "state.json")
+DEFAULT_PORT = 25052
+DEFAULT_INTERVAL = 1.0
+
+connected = set()
+running = True
+
+
+def read_state():
+    try:
+        with open(STATE_FILE, "r") as f:
+            return f.read().strip()
+    except (FileNotFoundError, PermissionError):
+        return json.dumps({"error": "state unavailable"})
+
+
+async def handler(websocket):
+    connected.add(websocket)
+    try:
+        # Send current state immediately
+        await websocket.send(read_state())
+        # Keep connection alive, wait for messages (ping/pong handled by library)
+        async for _ in websocket:
+            pass
+    finally:
+        connected.discard(websocket)
+
+
+async def broadcaster(interval):
+    while running:
+        if connected:
+            state = read_state()
+            await asyncio.gather(
+                *[ws.send(state) for ws in connected.copy()],
+                return_exceptions=True,
+            )
+        await asyncio.sleep(interval)
+
+
+def shutdown(sig, frame):
+    global running
+    running = False
+
+
+def main():
+    port = DEFAULT_PORT
+    interval = DEFAULT_INTERVAL
+
+    if len(sys.argv) > 1:
+        try:
+            port = int(sys.argv[1])
+        except ValueError:
+            pass
+    if len(sys.argv) > 2:
+        try:
+            interval = float(sys.argv[2])
+        except ValueError:
+            pass
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    async def serve():
+        async with websockets.serve(handler, "0.0.0.0", port):
+            await broadcaster(interval)
+
+    asyncio.run(serve())
+
+
+if __name__ == "__main__":
+    main()

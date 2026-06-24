@@ -32,6 +32,7 @@ Options:
   --draw              Print ASCII chart after logging (default: 60 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
   --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
+  --serve [PORT]      Start WebSocket server (default: 25052)
   -h, --help          Show this help message
   -v, --version       Show version
 
@@ -63,6 +64,8 @@ Examples:
   250mon --service                    # Run as background daemon
   250mon --service install            # Install systemd service
   250mon --service stop               # Stop service
+  250mon --serve                      # Start WebSocket server on port 25052
+  250mon --serve 8080                 # Start WebSocket server on custom port
 
 Config file: ~/.config/250mon/config.toml
   interval = 1000
@@ -94,6 +97,8 @@ MAX_SIZE=""
 ROTATE=5
 SERVICE=""
 SERVICE_ACTION=""
+SERVE=false
+SERVE_PORT=25052
 CONFIG_FILE="${HOME}/.config/250mon/config.toml"
 STATE_DIR="/run/250mon"
 PID_FILE="${STATE_DIR}/250mon.pid"
@@ -207,6 +212,15 @@ while [[ $# -gt 0 ]]; do
             SERVICE=true
             SERVICE_DAEMON=true
             shift
+            ;;
+        --serve)
+            SERVE=true
+            if [[ $# -gt 1 && "$2" != --* && "$2" =~ ^[0-9]+$ ]]; then
+                SERVE_PORT="$2"
+                shift 2
+            else
+                shift
+            fi
             ;;
         -h|--help)
             usage
@@ -639,6 +653,25 @@ service_restart() {
 service_status() {
     systemctl status 250mon.service
 }
+
+# Handle --serve (start WebSocket server and exit)
+if [[ "$SERVE" == true ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SERVE_SCRIPT=""
+    if [[ -x "${SCRIPT_DIR}/250mon-serve" ]]; then
+        SERVE_SCRIPT="${SCRIPT_DIR}/250mon-serve"
+    elif command -v 250mon-serve &>/dev/null; then
+        SERVE_SCRIPT="250mon-serve"
+    fi
+
+    if [[ -z "$SERVE_SCRIPT" ]]; then
+        echo "Error: 250mon-serve not found." >&2
+        exit 1
+    fi
+
+    echo "Starting WebSocket server on port $SERVE_PORT..."
+    exec "$SERVE_SCRIPT" "$SERVE_PORT"
+fi
 
 # Handle --service actions early (before main loop)
 if [[ "$SERVICE" == true ]]; then
