@@ -25,6 +25,7 @@ Options:
   -c, --count N       Number of samples then exit (default: infinite)
   --max-size SIZE     Rotate log at size limit (e.g., 10M, 500K, 1G)
   --rotate N          Keep max N rotated files (default: 5)
+  -w, --watch         Single-line live display (Ctrl+C to exit)
   --live              Full-screen live dashboard (Ctrl+C to exit)
   --spark             Show sparklines in live dashboard
   --plot              Generate plot after logging (default: 30 samples)
@@ -82,6 +83,7 @@ LOG_CPU=true
 PLOT=false
 DRAW=false
 LIVE=false
+WATCH=false
 SPARK=false
 PLOT_METRICS=""
 MAX_SIZE=""
@@ -161,6 +163,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --live)
             LIVE=true
+            shift
+            ;;
+        -w|--watch)
+            WATCH=true
             shift
             ;;
         --spark)
@@ -522,7 +528,7 @@ else
 fi
 
 cleanup() {
-    if [[ "$LIVE" == true ]]; then
+    if [[ "$LIVE" == true || "$WATCH" == true ]]; then
         # Restore terminal
         printf '\033[0m\n'
     fi
@@ -531,7 +537,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # Write header for CSV
-if [[ "$FORMAT" == "csv" && "$LIVE" == false ]]; then
+if [[ "$FORMAT" == "csv" && "$LIVE" == false && "$WATCH" == false ]]; then
     if [[ -n "$OUTPUT" ]]; then
         emit_csv_header >&3
     fi
@@ -653,6 +659,33 @@ live_draw() {
     printf "  ${D}Ctrl+C to exit${X}  ${W}sample #%-5s${X}\n" "$sample_count"
 }
 
+watch_draw() {
+    local ts="$1"
+    local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_load="$5" gpu_mem="$6"
+    local gpu_power="$7" gpu_vram_used="$8" gpu_vram_total="$9"
+    local cpu_freq="${10}" cpu_temp="${11}" cpu_usage="${12}" nvme_temp="${13}"
+
+    local R=$'\033[1;31m'
+    local G=$'\033[1;34m'
+    local W=$'\033[1m'
+    local D=$'\033[2m'
+    local X=$'\033[0m'
+
+    # Build single line
+    local line=""
+    if [[ "$LOG_GPU" == true ]]; then
+        line+="${R}GPU${X} ${W}${gpu_freq:--}${X}MHz ${gpu_temp:--}°C ${gpu_power:--}W "
+    fi
+    if [[ "$LOG_CPU" == true ]]; then
+        line+="${G}CPU${X} ${W}${cpu_freq:--}${X}MHz ${cpu_temp:--}°C ${cpu_usage:--}% "
+    fi
+    if [[ -n "$nvme_temp" ]]; then
+        line+="${D}NVMe${X} ${nvme_temp}°C "
+    fi
+
+    printf '\r\033[K%s %ssample#%s' "$line" "${D}" "$sample_count"
+}
+
 # --- Main loop ---
 sample_count=0
 while true; do
@@ -682,7 +715,11 @@ while true; do
     fi
 
     # Output
-    if [[ "$LIVE" == true ]]; then
+    if [[ "$WATCH" == true ]]; then
+        watch_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_load" "$gpu_mem" \
+                   "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
+                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp"
+    elif [[ "$LIVE" == true ]]; then
         # Collect history for sparklines
         [[ -n "$gpu_temp" ]] && LIVE_GPU_TEMP_HIST+=("$gpu_temp")
         [[ -n "$gpu_power" ]] && LIVE_GPU_POWER_HIST+=("$gpu_power")

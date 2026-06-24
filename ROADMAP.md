@@ -26,7 +26,7 @@
 
 ## v0.3.0 — Enhancements
 
-- [ ] `-w` / `--watch` — Single-line terminal display (live dashboard)
+- [x] `-w` / `--watch` — Single-line terminal display (live dashboard)
 - [ ] `--daemon` — Run as systemd service with generated unit file
 - [ ] Per-core CPU frequency logging (`--per-core`)
 - [ ] GPU clock state listing (`--list-states`)

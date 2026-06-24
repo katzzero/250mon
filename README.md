@@ -29,6 +29,7 @@ Options:
   -c, --count N       Number of samples then exit (default: infinite)
   --max-size SIZE     Rotate log at size limit (e.g., 10M, 500K, 1G)
   --rotate N          Keep max N rotated files (default: 5)
+  -w, --watch         Single-line live display (Ctrl+C to exit)
   -h, --help          Show help message
   -v, --version       Show version
 ```
@@ -70,6 +71,9 @@ Options:
 
 # Rotate logs at 10MB, keep 3 backups
 250mon --max-size 10M --rotate 3
+
+# Single-line live display
+250mon --watch
 ```
 
 ## CSV Output
