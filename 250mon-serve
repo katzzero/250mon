@@ -9,10 +9,10 @@ Usage:
 Modes (or set in config.toml):
   ws [port] [interval]        # WebSocket only
   http [port] [interval]      # HTTP only
-  both [ws_port] [http_port] [interval]  # Both
+  both [ws_port] [http_port] [interval]  # Full (both)
 
 Config (~/.config/250mon/config.toml):
-  serve_mode = "ws"           # ws, http, or both
+  serve_mode = "full"           # ws, http, or both
   serve_ws_port = 25052
   serve_http_port = 25053
   serve_interval = 1.0
@@ -129,7 +129,7 @@ def usage():
     print("Modes:")
     print("  ws [port] [interval]              WebSocket only (default port 25052)")
     print("  http [port] [interval]            HTTP only (default port 25053)")
-    print("  both [ws_port] [http_port] [interval]  Both servers")
+    print("  both [ws_port] [http_port] [interval]  Full (both servers)")
     print()
     print("If no mode given, reads from config.toml (serve_mode).")
     print()
@@ -139,7 +139,7 @@ def usage():
     print("  250mon-serve both 8080 8081       # WS :8080, HTTP :8081")
     print()
     print("Config (~/.config/250mon/config.toml):")
-    print('  serve_mode = "ws"                 # ws, http, or both')
+    print('  serve_mode = "full"                 # ws, http, or both')
     print("  serve_ws_port = 25052")
     print("  serve_http_port = 25053")
     print("  serve_interval = 1.0")
@@ -196,7 +196,7 @@ def main():
         print(f"HTTP server on http://0.0.0.0:{http_port}")
         start_http_server(http_port)
 
-    elif mode == "both":
+    elif mode == "full":
         if len(sys.argv) > 2:
             try: ws_port = int(sys.argv[2])
             except ValueError: pass

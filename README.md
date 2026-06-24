@@ -52,7 +52,7 @@ sudo reboot
 ```
 250mon [OPTIONS]
 
-Component selection (default: both GPU and CPU):
+Component selection (default: full GPU and CPU):
   --gpu               Log GPU metrics only
   --cpu               Log CPU metrics only
 
@@ -95,7 +95,7 @@ Info:
 Modes:
   ws [port] [interval]           WebSocket only
   http [port] [interval]         HTTP only
-  both [ws_port] [http_port]     Both servers
+  full [ws_port] [http_port]     Both servers
 
 Defaults from config.toml if no mode given.
 ```
@@ -264,14 +264,14 @@ Stream live state to clients (web dashboards, scripts, etc.):
 ```bash
 250mon-serve ws                          # WebSocket only
 250mon-serve http                        # HTTP only
-250mon-serve both                        # Both servers
-250mon-serve both 8080 8081              # Custom ports
+250mon-serve full                        # Both servers
+250mon-serve full 8080 8081              # Custom ports
 250mon-serve ws 8080 0.5                 # Custom port + interval
 ```
 
 If no mode is given, reads from `config.toml`:
 ```toml
-serve_mode = "ws"        # ws, http, or both
+serve_mode = "ws"        # ws, http, or full
 serve_ws_port = 25052
 serve_http_port = 25053
 serve_interval = 1.0
