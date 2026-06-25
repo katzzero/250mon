@@ -129,6 +129,13 @@ def core_freq(t, m, core_id):
 
 
 def main():
+    # Auto-elevate with sudo if needed (PCI config requires root)
+    if os.geteuid() != 0:
+        try:
+            os.open("/sys/bus/pci/devices/0000:00:00.0/config", os.O_RDWR)
+        except PermissionError:
+            os.execvp("sudo", ["sudo"] + sys.argv)
+
     bdf = find_smu_bdf()
     if not bdf:
         print("Error: SMU PCI device not found", file=sys.stderr)
