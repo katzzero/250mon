@@ -1217,7 +1217,7 @@ live_draw() {
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
-    local fan_rpm="${13}"
+    local fan_rpm="${13}" cpu_volt="${14}"
 
     printf '\033[2J\033[H'
 
@@ -1249,8 +1249,8 @@ live_draw() {
 
     if [[ "$LOG_CPU" == true ]]; then
         printf "${G}CPU${X}\n"
-        printf "  Freq: ${W}%6s${X} MHz   Usage:   ${W}%6s${X} %%\n" "${cpu_freq:--}" "${cpu_usage:--}"
-        printf "  Temp: ${W}%6s${X} °C\n" "${cpu_temp:--}"
+        printf "  Freq: ${W}%6s${X} MHz   Voltage: ${W}%4s${X} mV\n" "${cpu_freq:--}" "${cpu_volt:--}"
+        printf "  Temp: ${W}%6s${X} °C   Usage:   ${W}%6s${X} %%\n" "${cpu_temp:--}" "${cpu_usage:--}"
         if [[ "$SPARK" == true && ${#LIVE_CPU_TEMP_HIST[@]} -gt 1 ]]; then
             printf "  ${D}usage:${X} "
             live_sparkline LIVE_CPU_USAGE_HIST 40
@@ -1281,7 +1281,7 @@ watch_draw() {
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
-    local fan_rpm="${13}"
+    local fan_rpm="${13}" cpu_volt="${14}"
 
     local R=$'\033[1;31m'
     local G=$'\033[1;34m'
@@ -1292,10 +1292,10 @@ watch_draw() {
     # Build single line
     local line=""
     if [[ "$LOG_GPU" == true ]]; then
-        line+="${R}GPU${X} ${W}${gpu_freq:--}${X}MHz ${gpu_temp:--}°C ${gpu_power:--}W "
+        line+="${R}GPU${X} ${W}${gpu_freq:--}${X}MHz ${gpu_temp:--}°C ${gpu_power:--}W ${gpu_volt:--}mV "
     fi
     if [[ "$LOG_CPU" == true ]]; then
-        line+="${G}CPU${X} ${W}${cpu_freq:--}${X}MHz ${cpu_temp:--}°C ${cpu_usage:--}% "
+        line+="${G}CPU${X} ${W}${cpu_freq:--}${X}MHz ${cpu_temp:--}°C ${cpu_usage:--}% ${cpu_volt:--}mV "
     fi
     if [[ -n "$nvme_temp" ]]; then
         line+="${D}NVMe${X} ${nvme_temp}°C "
@@ -1371,7 +1371,7 @@ while true; do
     if [[ "$WATCH" == true ]]; then
         watch_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                    "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm"
+                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt"
     elif [[ "$LIVE" == true ]]; then
         # Collect history for sparklines
         [[ -n "$gpu_temp" ]] && LIVE_GPU_TEMP_HIST+=("$gpu_temp")
@@ -1386,7 +1386,7 @@ while true; do
 
         live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                   "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm"
+                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt"
     else
         if [[ -n "$OUTPUT" ]]; then
             case "$FORMAT" in
