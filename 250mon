@@ -564,6 +564,31 @@ read_cpu_usage() {
     PREV_CPU_IDLE=$idle_total
 }
 
+# --- CPU voltage reading ---
+read_cpu_voltage() {
+    # Read CPU Vcore from nct6686/nct6687 (in4_input)
+    local hwmon_dir="/sys/class/hwmon"
+    local hwmon name_file
+    for hwmon in "$hwmon_dir"/*/; do
+        name_file="${hwmon}name"
+        if [[ -f "$name_file" ]]; then
+            name=$(cat "$name_file" 2>/dev/null)
+            if [[ "$name" == "nct6686" || "$name" == "nct6687" ]]; then
+                local vcore_file="${hwmon}in4_input"
+                if [[ -f "$vcore_file" ]]; then
+                    local raw
+                    raw=$(cat "$vcore_file" 2>/dev/null) || return 1
+                    if [[ -n "$raw" && "$raw" -gt 0 ]]; then
+                        echo "$raw"
+                        return 0
+                    fi
+                fi
+            fi
+        fi
+    done
+    return 1
+}
+
 # --- NVMe reading function ---
 read_nvme_temp() {
     local hwmon_dir="/sys/class/hwmon"
@@ -736,9 +761,9 @@ emit_csv_header() {
                 header+=",cpu${i}_freq_mhz"
                 i=$((i + 1))
             done
-            header+=",cpu_temp_c,cpu_usage_pct,nvme_temp_c"
+            header+=",cpu_voltage_mv,cpu_temp_c,cpu_usage_pct,nvme_temp_c"
         else
-            header+=",cpu_freq_mhz,cpu_temp_c,cpu_usage_pct,nvme_temp_c"
+            header+=",cpu_freq_mhz,cpu_voltage_mv,cpu_temp_c,cpu_usage_pct,nvme_temp_c"
         fi
     fi
     [[ "$LOG_FAN" == true ]] && header+=",fan_rpm"
@@ -752,6 +777,7 @@ emit_csv() {
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
     local per_core_data="${13}"
     local fan_rpm="${14}"
+    local cpu_volt="${15}"
 
     local line="$ts"
     if [[ "$LOG_GPU" == true ]]; then
@@ -761,9 +787,9 @@ emit_csv() {
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
             line+=",${per_core_data}"
-            line+=",${cpu_temp},${cpu_usage},${nvme_temp}"
+            line+=",${cpu_volt},${cpu_temp},${cpu_usage},${nvme_temp}"
         else
-            line+=",${cpu_freq},${cpu_temp},${cpu_usage},${nvme_temp}"
+            line+=",${cpu_freq},${cpu_volt},${cpu_temp},${cpu_usage},${nvme_temp}"
         fi
     fi
     [[ "$LOG_FAN" == true ]] && line+=",${fan_rpm}"
@@ -789,6 +815,7 @@ emit_json() {
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
     local per_core_data="${13}"
     local fan_rpm="${14}"
+    local cpu_volt="${15}"
 
     printf '{"timestamp":"%s"' "$ts"
 
@@ -804,7 +831,6 @@ emit_json() {
 
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
-            # per_core_data is comma-separated freqs: "freq0,freq1,..."
             local IFS=','
             local core_idx=0
             for freq in $per_core_data; do
@@ -814,6 +840,7 @@ emit_json() {
         else
             printf ',"cpu_freq_mhz":%s' "$(json_val "$cpu_freq" num)"
         fi
+        printf ',"cpu_voltage_mv":%s' "$(json_val "$cpu_volt" num)"
         printf ',"cpu_temp_c":%s' "$(json_val "$cpu_temp" num)"
         printf ',"cpu_usage_pct":%s' "$(json_val "$cpu_usage" num)"
         printf ',"nvme_temp_c":%s' "$(json_val "$nvme_temp" num)"
@@ -829,7 +856,7 @@ write_state() {
     local gpu_freq="$1" gpu_volt="$2" gpu_temp="$3" gpu_mem="$4"
     local gpu_power="$5" gpu_vram_used="$6" gpu_vram_total="$7"
     local cpu_freq="$8" cpu_temp="$9" cpu_usage="${10}" nvme_temp="${11}"
-    local fan_rpm="${12}"
+    local fan_rpm="${12}" cpu_volt="${13}"
 
     [[ ! -d "$STATE_DIR" ]] && mkdir -p "$STATE_DIR"
 
@@ -842,6 +869,7 @@ write_state() {
     [[ -n "$gpu_vram_used" ]] && echo "$gpu_vram_used" > "${STATE_DIR}/gpu_vram_used"
     [[ -n "$gpu_vram_total" ]] && echo "$gpu_vram_total" > "${STATE_DIR}/gpu_vram_total"
     [[ -n "$cpu_freq" ]] && echo "$cpu_freq" > "${STATE_DIR}/cpu_freq"
+    [[ -n "$cpu_volt" ]] && echo "$cpu_volt" > "${STATE_DIR}/cpu_voltage"
     [[ -n "$cpu_temp" ]] && echo "$cpu_temp" > "${STATE_DIR}/cpu_temp"
     [[ -n "$cpu_usage" ]] && echo "$cpu_usage" > "${STATE_DIR}/cpu_usage"
     [[ -n "$nvme_temp" ]] && echo "$nvme_temp" > "${STATE_DIR}/nvme_temp"
@@ -862,6 +890,8 @@ write_state() {
     [[ -n "${SESSION_MAX_gpu_vram_used}" ]] && echo "${SESSION_MAX_gpu_vram_used}" > "${STATE_DIR}/gpu_vram_used_max"
     [[ -n "${SESSION_MIN_cpu_freq}" ]] && echo "${SESSION_MIN_cpu_freq}" > "${STATE_DIR}/cpu_freq_min"
     [[ -n "${SESSION_MAX_cpu_freq}" ]] && echo "${SESSION_MAX_cpu_freq}" > "${STATE_DIR}/cpu_freq_max"
+    [[ -n "${SESSION_MIN_cpu_volt}" ]] && echo "${SESSION_MIN_cpu_volt}" > "${STATE_DIR}/cpu_voltage_min"
+    [[ -n "${SESSION_MAX_cpu_volt}" ]] && echo "${SESSION_MAX_cpu_volt}" > "${STATE_DIR}/cpu_voltage_max"
     [[ -n "${SESSION_MIN_cpu_temp}" ]] && echo "${SESSION_MIN_cpu_temp}" > "${STATE_DIR}/cpu_temp_min"
     [[ -n "${SESSION_MAX_cpu_temp}" ]] && echo "${SESSION_MAX_cpu_temp}" > "${STATE_DIR}/cpu_temp_max"
     [[ -n "${SESSION_MIN_cpu_usage}" ]] && echo "${SESSION_MIN_cpu_usage}" > "${STATE_DIR}/cpu_usage_min"
@@ -876,7 +906,7 @@ write_state() {
     echo "$SESSION_SAMPLE_COUNT" > "${STATE_DIR}/sample_count"
 
     # JSON state file with current/min/max per metric
-    printf '{"session":{"start":"%s","samples":%d},"gpu_freq":{"value":%s,"min":%s,"max":%s},"gpu_voltage":{"value":%s,"min":%s,"max":%s},"gpu_temp":{"value":%s,"min":%s,"max":%s},"gpu_mem_clock":{"value":%s,"min":%s,"max":%s},"gpu_power":{"value":%s,"min":%s,"max":%s},"gpu_vram_used":{"value":%s,"min":%s,"max":%s},"cpu_freq":{"value":%s,"min":%s,"max":%s},"cpu_temp":{"value":%s,"min":%s,"max":%s},"cpu_usage":{"value":%s,"min":%s,"max":%s},"nvme_temp":{"value":%s,"min":%s,"max":%s},"fan_rpm":{"value":%s,"min":%s,"max":%s}}\n' \
+    printf '{"session":{"start":"%s","samples":%d},"gpu_freq":{"value":%s,"min":%s,"max":%s},"gpu_voltage":{"value":%s,"min":%s,"max":%s},"gpu_temp":{"value":%s,"min":%s,"max":%s},"gpu_mem_clock":{"value":%s,"min":%s,"max":%s},"gpu_power":{"value":%s,"min":%s,"max":%s},"gpu_vram_used":{"value":%s,"min":%s,"max":%s},"cpu_freq":{"value":%s,"min":%s,"max":%s},"cpu_voltage":{"value":%s,"min":%s,"max":%s},"cpu_temp":{"value":%s,"min":%s,"max":%s},"cpu_usage":{"value":%s,"min":%s,"max":%s},"nvme_temp":{"value":%s,"min":%s,"max":%s},"fan_rpm":{"value":%s,"min":%s,"max":%s}}\n' \
         "$SESSION_START_TIME" \
         "$SESSION_SAMPLE_COUNT" \
         "$(json_val "${gpu_freq}" num)" \
@@ -900,6 +930,9 @@ write_state() {
         "$(json_val "${cpu_freq}" num)" \
         "$(json_val "${SESSION_MIN_cpu_freq}" num)" \
         "$(json_val "${SESSION_MAX_cpu_freq}" num)" \
+        "$(json_val "${cpu_volt}" num)" \
+        "$(json_val "${SESSION_MIN_cpu_volt}" num)" \
+        "$(json_val "${SESSION_MAX_cpu_volt}" num)" \
         "$(json_val "${cpu_temp}" num)" \
         "$(json_val "${SESSION_MIN_cpu_temp}" num)" \
         "$(json_val "${SESSION_MAX_cpu_temp}" num)" \
@@ -1246,7 +1279,7 @@ while true; do
     fi
 
     # CPU
-    cpu_freq="" cpu_temp="" cpu_usage="" nvme_temp="" per_core_data=""
+    cpu_freq="" cpu_temp="" cpu_usage="" nvme_temp="" per_core_data="" cpu_volt=""
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
             per_core_data=$(read_cpu_freq_per_core) || true
@@ -1255,12 +1288,14 @@ while true; do
         else
             cpu_freq=$(read_cpu_freq) || true
         fi
+        cpu_volt=$(read_cpu_voltage) || true
         cpu_temp=$(read_cpu_temp) || true
         cpu_usage=$(read_cpu_usage) || true
         nvme_temp=$(read_nvme_temp) || true
         # Update session min/max
         [[ "$SERVICE" == true ]] && {
             update_min_max "cpu_freq" "$cpu_freq"
+            update_min_max "cpu_volt" "$cpu_volt"
             update_min_max "cpu_temp" "$cpu_temp"
             update_min_max "cpu_usage" "$cpu_usage"
             update_min_max "nvme_temp" "$nvme_temp"
@@ -1300,10 +1335,10 @@ while true; do
             case "$FORMAT" in
                 csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" >&3 ;;
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" >&3 ;;
                 json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" >&3 ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" >&3 ;;
             esac
         fi
 
@@ -1311,10 +1346,10 @@ while true; do
             case "$FORMAT" in
                 csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" ;;
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" ;;
                 json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" ;;
             esac
         fi
     fi
@@ -1324,7 +1359,7 @@ while true; do
         SESSION_SAMPLE_COUNT=$sample_count
         write_state "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                     "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm"
+                    "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt"
     fi
 
     sample_count=$((sample_count + 1))
