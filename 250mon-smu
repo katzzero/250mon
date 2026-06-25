@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Read CPU/GPU voltage and per-core frequency from BC-250 SMU.
+
+Self-contained implementation based on bc250_smu_oc:
+https://github.com/bc250-collective/bc250_smu_oc (MIT License)
+"""
+
+import fcntl
+import os
+import struct
+import sys
+import time
+
+# PCI config space offsets for SMU register access
+SMU_ADDR_REG = 0xB8
+SMU_DATA_REG = 0xBC
+
+# Queue 3 mailbox addresses (from bc250_smu_oc Ghidra descriptor table)
+Q3_CMD = 0x03B10A20
+Q3_RSP = 0x03B10A80
+Q3_ARG = 0x03B10A88
+
+# SMU return codes
+SMU_OK = 0x01
+SMU_FAILED = 0xFF
+SMU_DONE_STATUSES = {SMU_OK, SMU_FAILED, 0xFE, 0xFD, 0xFC}
+
+
+class SmuTransport:
+    """PCI config space read/write via sysfs."""
+
+    def __init__(self, bdf="0000:00:00.0"):
+        self._path = f"/sys/bus/pci/devices/{bdf}/config"
+        self._fd = None
+
+    def open(self):
+        self._fd = os.open(self._path, os.O_RDWR | os.O_CLOEXEC)
+
+    def close(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def read32(self, offset):
+        data = os.pread(self._fd, 4, offset)
+        return struct.unpack("<I", data)[0]
+
+    def write32(self, offset, value):
+        os.pwrite(self._fd, struct.pack("<I", value), offset)
+
+    def read_smu(self, reg):
+        self.write32(SMU_ADDR_REG, reg)
+        return self.read32(SMU_DATA_REG)
+
+    def write_smu(self, reg, value):
+        self.write32(SMU_ADDR_REG, reg)
+        self.write32(SMU_DATA_REG, value)
+
+
+class SmuMailbox:
+    """SMU mailbox command/response protocol."""
+
+    def __init__(self, transport, cmd_addr, rsp_addr, arg_addr, timeout=100):
+        self._t = transport
+        self._cmd = cmd_addr
+        self._rsp = rsp_addr
+        self._arg = arg_addr
+        self._timeout = timeout
+
+    def send(self, msg_id, arg=0):
+        self._t.write_smu(self._rsp, 0)
+        self._t.write_smu(self._arg, arg)
+        self._t.write_smu(self._cmd, msg_id)
+        return self._wait()
+
+    def read_arg(self):
+        return self._t.read_smu(self._arg)
+
+    def _wait(self):
+        for _ in range(self._timeout):
+            status = self._t.read_smu(self._rsp)
+            if status in SMU_DONE_STATUSES:
+                return status
+        return self._t.read_smu(self._rsp)
+
+
+def pack_u32(v):
+    return int(v) & 0xFFFFFFFF
+
+
+def decode_u32(v):
+    return int(v) & 0xFFFFFFFF
+
+
+def vid_to_mv(vid):
+    return int(round(((float(vid) * -0.00625) + 1.55) * 1000.0))
+
+
+def find_smu_bdf():
+    """Find the SMU PCI device (0000:00:00.0 for BC-250)."""
+    bdf = "0000:00:00.0"
+    if os.path.exists(f"/sys/bus/pci/devices/{bdf}/config"):
+        return bdf
+    return None
+
+
+def cpu_voltage(t, m):
+    """Read CPU voltage in mV via SMU (Queue 3, msg 0x36)."""
+    status = m.send(0x36)
+    if status == SMU_OK:
+        return decode_u32(m.read_arg())
+    return None
+
+
+def gpu_voltage(t, m):
+    """Read GPU voltage in mV via SMU (Queue 3, msg 0x37)."""
+    status = m.send(0x37)
+    if status == SMU_OK:
+        return decode_u32(m.read_arg())
+    return None
+
+
+def core_freq(t, m, core_id):
+    """Read core frequency in MHz via SMU (Queue 3, msg 0x43)."""
+    status = m.send(0x43, pack_u32(core_id))
+    if status == SMU_OK:
+        return decode_u32(m.read_arg())
+    return None
+
+
+def main():
+    bdf = find_smu_bdf()
+    if not bdf:
+        print("Error: SMU PCI device not found", file=sys.stderr)
+        sys.exit(1)
+
+    t = SmuTransport(bdf)
+    t.open()
+    m = SmuMailbox(t, Q3_CMD, Q3_RSP, Q3_ARG)
+
+    try:
+        if len(sys.argv) > 1:
+            cmd = sys.argv[1]
+            if cmd == "cpu-voltage":
+                v = cpu_voltage(t, m)
+                print(v if v is not None else "")
+            elif cmd == "gpu-voltage":
+                v = gpu_voltage(t, m)
+                print(v if v is not None else "")
+            elif cmd == "core-freq":
+                if len(sys.argv) < 3:
+                    print("Usage: 250mon-smu core-freq <core_id>", file=sys.stderr)
+                    sys.exit(1)
+                core_id = int(sys.argv[2])
+                f = core_freq(t, m, core_id)
+                print(f if f is not None else "")
+            elif cmd == "per-core-freq":
+                freqs = []
+                for i in range(8):
+                    f = core_freq(t, m, i)
+                    if f is not None:
+                        freqs.append(str(f))
+                print(",".join(freqs))
+            else:
+                print(f"Unknown command: {cmd}", file=sys.stderr)
+                print("Commands: cpu-voltage, gpu-voltage, core-freq, per-core-freq", file=sys.stderr)
+                sys.exit(1)
+        else:
+            # Default: print all metrics as space-separated
+            cv = cpu_voltage(t, m)
+            gv = gpu_voltage(t, m)
+            freqs = []
+            for i in range(8):
+                f = core_freq(t, m, i)
+                freqs.append(str(f) if f is not None else "")
+            print(f"{cv or ''} {gv or ''} {' '.join(freqs)}")
+    finally:
+        t.close()
+
+
+if __name__ == "__main__":
+    main()

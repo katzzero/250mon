@@ -10,7 +10,7 @@ Reads frequency, voltage, temperature, power, usage, and fan speed from sysfs/pr
 
 **250mon** (core):
 - `bash`, `awk`, `grep`, `sed`, `date`, `sleep`
-- No external packages required
+- `python3` (for SMU voltage/frequency reading, no pip packages needed)
 
 **250mon-draw** (plotting):
 - `python3`, `matplotlib`
@@ -21,8 +21,8 @@ Reads frequency, voltage, temperature, power, usage, and fan speed from sysfs/pr
 ## Install
 
 ```bash
-sudo cp 250mon 250mon-draw 250mon-serve /usr/local/bin/
-sudo chmod +x /usr/local/bin/250mon /usr/local/bin/250mon-draw /usr/local/bin/250mon-serve
+sudo cp 250mon 250mon-smu 250mon-draw 250mon-serve /usr/local/bin/
+sudo chmod +x /usr/local/bin/250mon /usr/local/bin/250mon-smu /usr/local/bin/250mon-draw /usr/local/bin/250mon-serve
 ```
 
 ### Fan Sensor Driver (Optional)
@@ -119,7 +119,8 @@ Defaults from config.toml if no mode given.
 | Column | Description | Source |
 |--------|-------------|--------|
 | `cpu_freq_mhz` | Average CPU frequency (MHz) | `/proc/cpuinfo` |
-| `cpu0_freq_mhz` .. `cpuN_freq_mhz` | Per-core frequency (with `--per-core`) | `/proc/cpuinfo` |
+| `cpu_voltage_mv` | CPU core voltage (mV) | SMU (embedded) |
+| `cpu0_freq_mhz` .. `cpuN_freq_mhz` | Per-core frequency (with `--per-core`) | SMU (actual freq) |
 | `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
 | `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
 | `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
@@ -302,3 +303,20 @@ curl http://localhost:25053/
 ## License
 
 MIT
+
+## Acknowledgments
+
+CPU voltage and per-core frequency reading based on [bc250_smu_oc](https://github.com/bc250-collective/bc250_smu_oc) (MIT License) by bc250-collective. The SMU communication code is embedded directly in `250mon-smu` — no external installation required.
+
+### SMU vs /proc/cpuinfo
+
+The `--per-core` flag uses SMU to read **actual** core frequencies, which differ from `/proc/cpuinfo`:
+
+- `/proc/cpuinfo` reports the **requested** frequency (may show max even when idle)
+- SMU reports the **real** frequency (shows actual clock, including power-gated cores)
+
+Example:
+```
+Core  | SMU (actual) | cpuinfo (requested)
+  3   |    1555 MHz  |     3491 MHz    ← cpuinfo shows max, SMU shows reality
+```

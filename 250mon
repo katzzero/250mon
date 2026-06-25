@@ -566,19 +566,24 @@ read_cpu_usage() {
     PREV_CPU_IDLE=$idle_total
 }
 
+# --- Find SMU helper ---
+find_smu_helper() {
+    if [[ -x "/usr/local/bin/250mon-smu" ]]; then
+        echo "/usr/local/bin/250mon-smu"
+    elif [[ -x "$(dirname "${BASH_SOURCE[0]}")/250mon-smu" ]]; then
+        echo "$(dirname "${BASH_SOURCE[0]}")/250mon-smu"
+    fi
+}
+
 # --- CPU voltage reading ---
 read_cpu_voltage() {
-    # Try SMU first (bc250_smu library), fallback to nct6686/nct6687
-    local smu_helper=""
-    if [[ -x "/usr/local/bin/250mon-smu-voltage" ]]; then
-        smu_helper="/usr/local/bin/250mon-smu-voltage"
-    elif [[ -x "$(dirname "${BASH_SOURCE[0]}")/250mon-smu-voltage" ]]; then
-        smu_helper="$(dirname "${BASH_SOURCE[0]}")/250mon-smu-voltage"
-    fi
+    # Try SMU first (embedded bc250_smu), fallback to nct6686/nct6687
+    local smu_helper
+    smu_helper=$(find_smu_helper)
 
     if [[ -n "$smu_helper" ]]; then
         local val
-        val=$("$smu_helper" 2>/dev/null) || true
+        val=$("$smu_helper" cpu-voltage 2>/dev/null) || true
         if [[ -n "$val" && "$val" -gt 0 ]]; then
             echo "$val"
             return 0
@@ -709,7 +714,36 @@ read_fan_speed() {
 
 # --- Per-core CPU frequency ---
 read_cpu_freq_per_core() {
-    # Returns comma-separated frequencies for each core
+    # Try SMU first (actual frequencies), fallback to /proc/cpuinfo
+    local smu_helper
+    smu_helper=$(find_smu_helper)
+
+    if [[ -n "$smu_helper" ]]; then
+        local smu_out
+        smu_out=$("$smu_helper" per-core-freq 2>/dev/null) || true
+        if [[ -n "$smu_out" ]]; then
+            # SMU returns up to 8 cores; pad to 12 if needed
+            local ncores
+            ncores=$(awk '/^processor/ {n=$3} END {print n+1}' /proc/cpuinfo 2>/dev/null || echo 12)
+            local IFS=','
+            local -a vals=($smu_out)
+            local padded=""
+            local i=0
+            while [[ $i -lt $ncores ]]; do
+                if [[ $i -lt ${#vals[@]} ]]; then
+                    padded+="${vals[$i]}"
+                fi
+                if [[ $i -lt $((ncores - 1)) ]]; then
+                    padded+=","
+                fi
+                i=$((i + 1))
+            done
+            echo "$padded"
+            return 0
+        fi
+    fi
+
+    # Fallback: /proc/cpuinfo (requested frequencies)
     awk '/^processor/ {core=$3} /^cpu MHz/ {printf "%s%.0f", (core>0 ? "," : ""), $4} END {print ""}' /proc/cpuinfo 2>/dev/null
 }
 
@@ -850,10 +884,14 @@ emit_json() {
 
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
+            local ncores
+            ncores=$(awk '/^processor/ {n=$3} END {print n+1}' /proc/cpuinfo 2>/dev/null || echo 12)
             local IFS=','
+            local -a freqs=($per_core_data)
             local core_idx=0
-            for freq in $per_core_data; do
-                printf ',"cpu%d_freq_mhz":%s' "$core_idx" "$(json_val "$freq" num)"
+            while [[ $core_idx -lt $ncores ]]; do
+                local f="${freqs[$core_idx]:-}"
+                printf ',"cpu%d_freq_mhz":%s' "$core_idx" "$(json_val "$f" num)"
                 core_idx=$((core_idx + 1))
             done
         else
