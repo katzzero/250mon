@@ -32,6 +32,7 @@ Options:
   --draw              Print ASCII chart after logging (default: 60 samples)
   --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
   --per-core          Log per-core CPU frequencies instead of average
+  --voltage           Include CPU voltage from nct6686/nct6687 (returns null on BC-250)
   --list-states       List GPU clock states and exit
   --service [ACTION]  Run as service (no arg: daemon; install|uninstall|start|stop|restart)
   --serve [PORT]      Start WebSocket server (default: 25052)
@@ -49,6 +50,7 @@ GPU Metrics:
 
 CPU Metrics:
   cpu_freq_mhz        Average CPU frequency (MHz)
+  cpu_voltage_mv      CPU core voltage (mV, via SMU or nct6686)
   cpu_temp_c          CPU temperature (°C, from k10temp)
   cpu_usage_pct       Aggregate CPU usage percentage
   nvme_temp_c         NVMe drive temperature (°C)
@@ -566,7 +568,24 @@ read_cpu_usage() {
 
 # --- CPU voltage reading ---
 read_cpu_voltage() {
-    # Read CPU Vcore from nct6686/nct6687 (in4_input)
+    # Try SMU first (bc250_smu library), fallback to nct6686/nct6687
+    local smu_helper=""
+    if [[ -x "/usr/local/bin/250mon-smu-voltage" ]]; then
+        smu_helper="/usr/local/bin/250mon-smu-voltage"
+    elif [[ -x "$(dirname "${BASH_SOURCE[0]}")/250mon-smu-voltage" ]]; then
+        smu_helper="$(dirname "${BASH_SOURCE[0]}")/250mon-smu-voltage"
+    fi
+
+    if [[ -n "$smu_helper" ]]; then
+        local val
+        val=$("$smu_helper" 2>/dev/null) || true
+        if [[ -n "$val" && "$val" -gt 0 ]]; then
+            echo "$val"
+            return 0
+        fi
+    fi
+
+    # Fallback: nct6686/nct6687 (in4_input)
     local hwmon_dir="/sys/class/hwmon"
     local hwmon name_file
     for hwmon in "$hwmon_dir"/*/; do
