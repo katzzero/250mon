@@ -21,9 +21,18 @@ Reads frequency, voltage, temperature, power, usage, and fan speed from sysfs/pr
 ## Install
 
 ```bash
-sudo cp 250mon 250mon-smu 250mon-draw 250mon-serve 250mon_usage.py /usr/local/bin/
-sudo chmod +x /usr/local/bin/250mon /usr/local/bin/250mon-smu /usr/local/bin/250mon-draw /usr/local/bin/250mon-serve /usr/local/bin/250mon_usage.py
+./install.sh                      # install to /usr/local/bin (auto sudo)
+./install.sh --prefix /usr        # install to /usr/bin
+./install.sh uninstall            # remove
 ```
+
+For packaging (PKGBUILD), use a staged install with no system impact:
+
+```bash
+./install.sh --destdir "$pkgdir"
+```
+
+Installs `250mon`, `250mon-smu`, `250mon-draw`, `250mon-serve`, and `250mon_usage.py`.
 
 ### Fan Sensor Driver (Optional)
 
