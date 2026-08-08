@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.3.4"
 
 usage() {
     cat <<EOF
@@ -80,7 +80,7 @@ Config file: ~/.config/250mon/config.toml
 EOF
 }
 
-VERSION="0.1.0"
+VERSION="0.3.4"
 
 # Defaults
 INTERVAL_MS=1000
@@ -1438,7 +1438,7 @@ live_draw() {
     local W="\033[1m"
     local X="\033[0m"
 
-    printf "${W}250mon live dashboard${X}  %s\n" "$ts"
+    printf "${W}250mon v${VERSION}${X}  live dashboard  %s\n" "$ts"
     printf '%0.s-' {1..60}
     echo
 

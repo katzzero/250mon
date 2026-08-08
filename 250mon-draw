@@ -22,7 +22,7 @@ try:
 except ImportError:
     HAS_MPL = False
 
-VERSION = "0.1.0"
+VERSION = "0.3.4"
 
 # Metric definitions: (column_name, label, unit, color, group)
 METRIC_DEFS = {
