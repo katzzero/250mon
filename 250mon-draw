@@ -29,6 +29,7 @@ METRIC_DEFS = {
     "gpu_freq_mhz":       ("GPU Freq", "MHz", "#e74c3c", "gpu"),
     "gpu_voltage_mv":     ("GPU Voltage", "mV", "#e67e22", "gpu"),
     "gpu_temp_c":         ("GPU Temp", "°C", "#e74c3c", "gpu"),
+    "gpu_load_pct":       ("GPU Load", "%", "#f39c12", "gpu"),
     "gpu_mem_clock_mhz":  ("Mem Clock", "MHz", "#9b59b6", "gpu"),
     "gpu_power_w":        ("GPU Power", "W", "#e74c3c", "gpu"),
     "gpu_vram_used_mib":  ("VRAM Used", "MiB", "#3498db", "gpu"),

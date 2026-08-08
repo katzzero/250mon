@@ -117,6 +117,9 @@ GPU_PATH=""
 PREV_CPU_TOTAL=0
 PREV_CPU_IDLE=0
 
+# Previous per-core CPU stat (for per-core usage)
+PREV_PERCORE_DATA=""
+
 # Session min/max tracking
 SESSION_MIN_gpu_freq="" SESSION_MAX_gpu_freq=""
 SESSION_MIN_gpu_volt="" SESSION_MAX_gpu_volt=""
@@ -129,6 +132,8 @@ SESSION_MIN_cpu_temp="" SESSION_MAX_cpu_temp=""
 SESSION_MIN_cpu_usage="" SESSION_MAX_cpu_usage=""
 SESSION_MIN_nvme_temp="" SESSION_MAX_nvme_temp=""
 SESSION_MIN_fan_rpm="" SESSION_MAX_fan_rpm=""
+SESSION_MIN_ram_used="" SESSION_MAX_ram_used=""
+SESSION_MIN_ram_total="" SESSION_MAX_ram_total=""
 SESSION_START_TIME=""
 SESSION_SAMPLE_COUNT=0
 
@@ -142,16 +147,18 @@ update_min_max() {
     local max_var="SESSION_MAX_${var_name}"
     
     # Set min
-    if [[ -z "${!min_var}" ]]; then
+    local cur_min="${!min_var:-}"
+    if [[ -z "$cur_min" ]]; then
         eval "$min_var=$value"
-    elif awk "BEGIN {exit !($value < ${!min_var})}"; then
+    elif awk "BEGIN {exit !($value < $cur_min)}"; then
         eval "$min_var=$value"
     fi
     
     # Set max
-    if [[ -z "${!max_var}" ]]; then
+    local cur_max="${!max_var:-}"
+    if [[ -z "$cur_max" ]]; then
         eval "$max_var=$value"
-    elif awk "BEGIN {exit !($value > ${!max_var})}"; then
+    elif awk "BEGIN {exit !($value > $cur_max)}"; then
         eval "$max_var=$value"
     fi
 }
@@ -168,6 +175,8 @@ SESSION_MIN_cpu_temp="" SESSION_MAX_cpu_temp=""
 SESSION_MIN_cpu_usage="" SESSION_MAX_cpu_usage=""
 SESSION_MIN_nvme_temp="" SESSION_MAX_nvme_temp=""
 SESSION_MIN_fan_rpm="" SESSION_MAX_fan_rpm=""
+SESSION_MIN_ram_used="" SESSION_MAX_ram_used=""
+SESSION_MIN_ram_total="" SESSION_MAX_ram_total=""
 SESSION_START_TIME=""
 SESSION_SAMPLE_COUNT=0
 
@@ -511,6 +520,14 @@ read_gpu_vram_total() {
     fi
 }
 
+read_ram_used() {
+    awk '/^MemTotal:/{tot=$2} /^MemAvailable:/{avail=$2} END{if(tot>0) printf "%.0f", (tot-avail)/1024}' /proc/meminfo 2>/dev/null
+}
+
+read_ram_total() {
+    awk '/^MemTotal:/{printf "%.0f", $2/1024}' /proc/meminfo 2>/dev/null
+}
+
 # --- CPU reading functions ---
 read_cpu_freq() {
     # Average frequency across all cores from /proc/cpuinfo
@@ -564,6 +581,26 @@ read_cpu_usage() {
 
     PREV_CPU_TOTAL=$total
     PREV_CPU_IDLE=$idle_total
+}
+
+# --- Per-core CPU usage ---
+# Reads /proc/stat, calculates delta from PREV_PERCORE_DATA, outputs per-core usage %
+read_cpu_usage_per_core() {
+    local cur_data
+    cur_data=$(awk '/^cpu[0-9]/{gsub(/[^0-9]/,"",$1); t=$1+0; tot=0; for(i=2;i<=NF;i++) tot+=$i; idle=$5+$6; printf "%d:%d:%d ",t,tot,idle}' /proc/stat 2>/dev/null)
+
+    local prev_data="$PREV_PERCORE_DATA"
+    PREV_PERCORE_DATA="$cur_data"
+    _PERCORE_USAGE_RESULT=""
+
+    [[ -z "$prev_data" ]] && return 0
+
+    # Parse prev and cur, calculate delta per thread, average per physical core
+    local usage_helper="/usr/local/bin/250mon_usage.py"
+    if [[ -f "$(dirname "${BASH_SOURCE[0]}")/250mon_usage.py" ]]; then
+        usage_helper="$(dirname "${BASH_SOURCE[0]}")/250mon_usage.py"
+    fi
+    _PERCORE_USAGE_RESULT=$(python3 "$usage_helper" "$prev_data" "$cur_data" 2>/dev/null)
 }
 
 # --- Find SMU helper ---
@@ -714,37 +751,64 @@ read_fan_speed() {
 
 # --- Per-core CPU frequency ---
 read_cpu_freq_per_core() {
-    # Try SMU first (actual frequencies), fallback to /proc/cpuinfo
+    # Prefer SMU (real frequencies, one positional slot per physical core 0-7).
+    # Map each SMU slot to its core id so unlocked cores 3 and 7 show up correctly.
     local smu_helper
     smu_helper=$(find_smu_helper)
-
     if [[ -n "$smu_helper" ]]; then
         local smu_out
         smu_out=$("$smu_helper" per-core-freq 2>/dev/null) || true
         if [[ -n "$smu_out" ]]; then
-            # SMU returns up to 8 cores; pad to 12 if needed
-            local ncores
-            ncores=$(awk '/^processor/ {n=$3} END {print n+1}' /proc/cpuinfo 2>/dev/null || echo 12)
             local IFS=','
-            local -a vals=($smu_out)
-            local padded=""
-            local i=0
-            while [[ $i -lt $ncores ]]; do
-                if [[ $i -lt ${#vals[@]} ]]; then
-                    padded+="${vals[$i]}"
-                fi
-                if [[ $i -lt $((ncores - 1)) ]]; then
-                    padded+=","
-                fi
-                i=$((i + 1))
-            done
-            echo "$padded"
+            local -a smu_vals=($smu_out)
+            local out=""
+            local cid
+            while read -r cid; do
+                local v="${smu_vals[$cid]:-}"
+                [[ -n "$out" ]] && out+=","
+                out+="$v"
+            done < <(grep "^core id" /proc/cpuinfo | awk '{print $4}' | sort -n -u)
+            echo "$out"
             return 0
         fi
     fi
 
-    # Fallback: /proc/cpuinfo (requested frequencies)
-    awk '/^processor/ {core=$3} /^cpu MHz/ {printf "%s%.0f", (core>0 ? "," : ""), $4} END {print ""}' /proc/cpuinfo 2>/dev/null
+    # Fallback: /proc/cpuinfo requested frequencies, averaged per physical core
+    # Uses core id from /proc/cpuinfo to map threads → physical cores
+    # Note: field order is processor → cpu MHz → core id
+    awk '
+    /^processor/ {
+        # Process previous entry
+        if (core != -1 && mhz > 0) {
+            freq[core] += mhz
+            count[core]++
+            if (core > maxcore) maxcore = core
+        }
+        core = -1
+        mhz = 0
+    }
+    /^core id/   { core = $4 + 0 }
+    /^cpu MHz/   { mhz = $4 + 0 }
+    END {
+        # Last entry
+        if (core != -1 && mhz > 0) {
+            freq[core] += mhz
+            count[core]++
+            if (core > maxcore) maxcore = core
+        }
+        # Output average per physical core
+        first = 1
+        for (c = 0; c <= maxcore; c++) {
+            if (c in count) {
+                avg = int(freq[c] / count[c])
+                if (!first) printf ","
+                printf "%d", avg
+                first = 0
+            }
+        }
+        printf "\n"
+    }
+    ' /proc/cpuinfo 2>/dev/null
 }
 
 # --- GPU clock states ---
@@ -803,16 +867,34 @@ timestamp() {
 
 emit_csv_header() {
     local header="timestamp"
-    [[ "$LOG_GPU" == true ]] && header+=",gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_mem_clock_mhz,gpu_power_w,gpu_vram_used_mib,gpu_vram_total_mib"
+    [[ "$LOG_GPU" == true ]] && header+=",gpu_freq_mhz,gpu_voltage_mv,gpu_temp_c,gpu_mem_clock_mhz,gpu_power_w,gpu_vram_used_mib,gpu_vram_total_mib,ram_used_mib,ram_total_mib"
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
-            # Get number of cores
-            local ncores
-            ncores=$(awk '/^processor/ {n=$3} END {print n+1}' /proc/cpuinfo 2>/dev/null || echo 12)
-            local i=0
-            while [[ $i -lt $ncores ]]; do
-                header+=",cpu${i}_freq_mhz"
-                i=$((i + 1))
+            # Per-core columns in ascending physical core id order (OFF cores included)
+            local end_cid=0
+            local -a hdr_core_ids=()
+            while IFS=: read -r _ val; do
+                val="${val// /}"
+                [[ "$val" =~ ^[0-9]+$ ]] || continue
+                local found=0 c
+                for c in "${hdr_core_ids[@]}"; do [[ "$c" == "$val" ]] && found=1 && break; done
+                [[ $found -eq 0 ]] && hdr_core_ids+=("$val")
+            done < <(grep "^core id" /proc/cpuinfo)
+            if [[ ${#hdr_core_ids[@]} -gt 0 ]]; then
+                local max_cid="${hdr_core_ids[$((${#hdr_core_ids[@]} - 1))]}"
+                end_cid=$((max_cid + 1))
+                local rem=$((end_cid % 4))
+                [[ $rem -ne 0 ]] && end_cid=$((end_cid + 4 - rem))
+            fi
+            local ciid=0
+            while [[ $ciid -lt $end_cid ]]; do
+                header+=",cpu${ciid}_freq_mhz"
+                ciid=$((ciid + 1))
+            done
+            local ciid2=0
+            while [[ $ciid2 -lt $end_cid ]]; do
+                header+=",cpu${ciid2}_usage_pct"
+                ciid2=$((ciid2 + 1))
             done
             header+=",cpu_voltage_mv,cpu_temp_c,cpu_usage_pct,nvme_temp_c"
         else
@@ -831,15 +913,56 @@ emit_csv() {
     local per_core_data="${13}"
     local fan_rpm="${14}"
     local cpu_volt="${15}"
+    local ram_used="${16}" ram_total="${17}"
 
     local line="$ts"
     if [[ "$LOG_GPU" == true ]]; then
         line+=",${gpu_freq},${gpu_volt},${gpu_temp},${gpu_mem}"
-        line+=",${gpu_power},${gpu_vram_used},${gpu_vram_total}"
+        line+=",${gpu_power},${gpu_vram_used},${gpu_vram_total},${ram_used},${ram_total}"
     fi
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
-            line+=",${per_core_data}"
+            # Map per-core values by physical core id, emit in ascending order
+            # (matching emit_csv_header so columns stay aligned)
+            local IFS=','
+            local -a freqs=($per_core_data)
+            local -a usage_vals=(${per_core_usage// / })
+            local -a core_ids=()
+            while IFS=: read -r _ val; do
+                val="${val// /}"
+                [[ "$val" =~ ^[0-9]+$ ]] || continue
+                local found=0 c
+                for c in "${core_ids[@]}"; do [[ "$c" == "$val" ]] && found=1 && break; done
+                [[ $found -eq 0 ]] && core_ids+=("$val")
+            done < <(grep "^core id" /proc/cpuinfo)
+
+            local -a freq_by_core=()
+            local -a usage_by_core=()
+            local idx=0
+            for cid in "${core_ids[@]}"; do
+                freq_by_core[$cid]="${freqs[$idx]:-}"
+                usage_by_core[$cid]="${usage_vals[$idx]:-}"
+                idx=$((idx + 1))
+            done
+
+            local end_core=0
+            if [[ ${#core_ids[@]} -gt 0 ]]; then
+                local max_core="${core_ids[$((${#core_ids[@]} - 1))]}"
+                end_core=$((max_core + 1))
+                local rem=$((end_core % 4))
+                [[ $rem -ne 0 ]] && end_core=$((end_core + 4 - rem))
+            fi
+
+            local ciid=0
+            while [[ $ciid -lt $end_core ]]; do
+                line+=",${freq_by_core[$ciid]:-}"
+                ciid=$((ciid + 1))
+            done
+            local ciid2=0
+            while [[ $ciid2 -lt $end_core ]]; do
+                line+=",${usage_by_core[$ciid2]:-}"
+                ciid2=$((ciid2 + 1))
+            done
             line+=",${cpu_volt},${cpu_temp},${cpu_usage},${nvme_temp}"
         else
             line+=",${cpu_freq},${cpu_volt},${cpu_temp},${cpu_usage},${nvme_temp}"
@@ -869,6 +992,7 @@ emit_json() {
     local per_core_data="${13}"
     local fan_rpm="${14}"
     local cpu_volt="${15}"
+    local ram_used="${16}" ram_total="${17}"
 
     printf '{"timestamp":"%s"' "$ts"
 
@@ -880,20 +1004,49 @@ emit_json() {
         printf ',"gpu_power_w":%s' "$(json_val "$gpu_power" num)"
         printf ',"gpu_vram_used_mib":%s' "$(json_val "$gpu_vram_used" num)"
         printf ',"gpu_vram_total_mib":%s' "$(json_val "$gpu_vram_total" num)"
+        printf ',"ram_used_mib":%s' "$(json_val "$ram_used" num)"
+        printf ',"ram_total_mib":%s' "$(json_val "$ram_total" num)"
     fi
 
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
-            local ncores
-            ncores=$(awk '/^processor/ {n=$3} END {print n+1}' /proc/cpuinfo 2>/dev/null || echo 12)
             local IFS=','
             local -a freqs=($per_core_data)
-            local core_idx=0
-            while [[ $core_idx -lt $ncores ]]; do
-                local f="${freqs[$core_idx]:-}"
-                printf ',"cpu%d_freq_mhz":%s' "$core_idx" "$(json_val "$f" num)"
-                core_idx=$((core_idx + 1))
+            local -a usage_vals=(${per_core_usage// / })
+            local -a core_ids=()
+            while IFS=: read -r _ val; do
+                val="${val// /}"
+                [[ "$val" =~ ^[0-9]+$ ]] || continue
+                local found=0 c
+                for c in "${core_ids[@]}"; do [[ "$c" == "$val" ]] && found=1 && break; done
+                [[ $found -eq 0 ]] && core_ids+=("$val")
+            done < <(grep "^core id" /proc/cpuinfo)
+
+            local i=0
+            while [[ $i -lt ${#freqs[@]} ]]; do
+                local cid="${core_ids[$i]:-$i}"
+                printf ',"cpu%s_freq_mhz":%s' "$cid" "$(json_val "${freqs[$i]}" num)"
+                local u="${usage_vals[$i]:-}"
+                printf ',"cpu%s_usage_pct":%s' "$cid" "$(json_val "$u" num)"
+                i=$((i + 1))
             done
+            # OFF cores
+            if [[ ${#core_ids[@]} -gt 0 ]]; then
+                local max_core="${core_ids[$((${#core_ids[@]} - 1))]}"
+                local end_core=$((max_core + 1))
+                local rem=$((end_core % 4))
+                [[ $rem -ne 0 ]] && end_core=$((end_core + 4 - rem))
+                local ciid=0
+                while [[ $ciid -lt $end_core ]]; do
+                    local found=0 c
+                    for c in "${core_ids[@]}"; do [[ "$c" == "$ciid" ]] && found=1 && break; done
+                    if [[ $found -eq 0 ]]; then
+                        printf ',"cpu%s_freq_mhz":null' "$ciid"
+                        printf ',"cpu%s_usage_pct":null' "$ciid"
+                    fi
+                    ciid=$((ciid + 1))
+                done
+            fi
         else
             printf ',"cpu_freq_mhz":%s' "$(json_val "$cpu_freq" num)"
         fi
@@ -925,6 +1078,8 @@ write_state() {
     [[ -n "$gpu_power" ]] && echo "$gpu_power" > "${STATE_DIR}/gpu_power"
     [[ -n "$gpu_vram_used" ]] && echo "$gpu_vram_used" > "${STATE_DIR}/gpu_vram_used"
     [[ -n "$gpu_vram_total" ]] && echo "$gpu_vram_total" > "${STATE_DIR}/gpu_vram_total"
+    [[ -n "$ram_used" ]] && echo "$ram_used" > "${STATE_DIR}/ram_used"
+    [[ -n "$ram_total" ]] && echo "$ram_total" > "${STATE_DIR}/ram_total"
     [[ -n "$cpu_freq" ]] && echo "$cpu_freq" > "${STATE_DIR}/cpu_freq"
     [[ -n "$cpu_volt" ]] && echo "$cpu_volt" > "${STATE_DIR}/cpu_voltage"
     [[ -n "$cpu_temp" ]] && echo "$cpu_temp" > "${STATE_DIR}/cpu_temp"
@@ -963,45 +1118,99 @@ write_state() {
     echo "$SESSION_SAMPLE_COUNT" > "${STATE_DIR}/sample_count"
 
     # JSON state file with current/min/max per metric
-    printf '{"session":{"start":"%s","samples":%d},"gpu_freq":{"value":%s,"min":%s,"max":%s},"gpu_voltage":{"value":%s,"min":%s,"max":%s},"gpu_temp":{"value":%s,"min":%s,"max":%s},"gpu_mem_clock":{"value":%s,"min":%s,"max":%s},"gpu_power":{"value":%s,"min":%s,"max":%s},"gpu_vram_used":{"value":%s,"min":%s,"max":%s},"cpu_freq":{"value":%s,"min":%s,"max":%s},"cpu_voltage":{"value":%s,"min":%s,"max":%s},"cpu_temp":{"value":%s,"min":%s,"max":%s},"cpu_usage":{"value":%s,"min":%s,"max":%s},"nvme_temp":{"value":%s,"min":%s,"max":%s},"fan_rpm":{"value":%s,"min":%s,"max":%s}}\n' \
-        "$SESSION_START_TIME" \
-        "$SESSION_SAMPLE_COUNT" \
-        "$(json_val "${gpu_freq}" num)" \
-        "$(json_val "${SESSION_MIN_gpu_freq}" num)" \
-        "$(json_val "${SESSION_MAX_gpu_freq}" num)" \
-        "$(json_val "${gpu_volt}" num)" \
-        "$(json_val "${SESSION_MIN_gpu_volt}" num)" \
-        "$(json_val "${SESSION_MAX_gpu_volt}" num)" \
-        "$(json_val "${gpu_temp}" num)" \
-        "$(json_val "${SESSION_MIN_gpu_temp}" num)" \
-        "$(json_val "${SESSION_MAX_gpu_temp}" num)" \
-        "$(json_val "${gpu_mem}" num)" \
-        "$(json_val "${SESSION_MIN_gpu_mem}" num)" \
-        "$(json_val "${SESSION_MAX_gpu_mem}" num)" \
-        "$(json_val "${gpu_power}" num)" \
-        "$(json_val "${SESSION_MIN_gpu_power}" num)" \
-        "$(json_val "${SESSION_MAX_gpu_power}" num)" \
-        "$(json_val "${gpu_vram_used}" num)" \
-        "$(json_val "${SESSION_MIN_gpu_vram_used}" num)" \
-        "$(json_val "${SESSION_MAX_gpu_vram_used}" num)" \
-        "$(json_val "${cpu_freq}" num)" \
-        "$(json_val "${SESSION_MIN_cpu_freq}" num)" \
-        "$(json_val "${SESSION_MAX_cpu_freq}" num)" \
-        "$(json_val "${cpu_volt}" num)" \
-        "$(json_val "${SESSION_MIN_cpu_volt}" num)" \
-        "$(json_val "${SESSION_MAX_cpu_volt}" num)" \
-        "$(json_val "${cpu_temp}" num)" \
-        "$(json_val "${SESSION_MIN_cpu_temp}" num)" \
-        "$(json_val "${SESSION_MAX_cpu_temp}" num)" \
-        "$(json_val "${cpu_usage}" num)" \
-        "$(json_val "${SESSION_MIN_cpu_usage}" num)" \
-        "$(json_val "${SESSION_MAX_cpu_usage}" num)" \
-        "$(json_val "${nvme_temp}" num)" \
-        "$(json_val "${SESSION_MIN_nvme_temp}" num)" \
-        "$(json_val "${SESSION_MAX_nvme_temp}" num)" \
-        "$(json_val "${fan_rpm}" num)" \
-        "$(json_val "${SESSION_MIN_fan_rpm}" num)" \
-        "$(json_val "${SESSION_MAX_fan_rpm}" num)" > "${STATE_DIR}/state.json"
+    local state_json="{\"session\":{\"start\":\"$SESSION_START_TIME\",\"samples\":$SESSION_SAMPLE_COUNT}"
+    state_json+=",\"gpu_freq\":{\"value\":$(json_val "${gpu_freq}" num),\"min\":$(json_val "${SESSION_MIN_gpu_freq}" num),\"max\":$(json_val "${SESSION_MAX_gpu_freq}" num)}"
+    state_json+=",\"gpu_voltage\":{\"value\":$(json_val "${gpu_volt}" num),\"min\":$(json_val "${SESSION_MIN_gpu_volt}" num),\"max\":$(json_val "${SESSION_MAX_gpu_volt}" num)}"
+    state_json+=",\"gpu_temp\":{\"value\":$(json_val "${gpu_temp}" num),\"min\":$(json_val "${SESSION_MIN_gpu_temp}" num),\"max\":$(json_val "${SESSION_MAX_gpu_temp}" num)}"
+    state_json+=",\"gpu_mem_clock\":{\"value\":$(json_val "${gpu_mem}" num),\"min\":$(json_val "${SESSION_MIN_gpu_mem}" num),\"max\":$(json_val "${SESSION_MAX_gpu_mem}" num)}"
+    state_json+=",\"gpu_power\":{\"value\":$(json_val "${gpu_power}" num),\"min\":$(json_val "${SESSION_MIN_gpu_power}" num),\"max\":$(json_val "${SESSION_MAX_gpu_power}" num)}"
+    state_json+=",\"gpu_vram_used\":{\"value\":$(json_val "${gpu_vram_used}" num),\"min\":$(json_val "${SESSION_MIN_gpu_vram_used}" num),\"max\":$(json_val "${SESSION_MAX_gpu_vram_used}" num)}"
+    state_json+=",\"ram_used\":{\"value\":$(json_val "${ram_used}" num),\"min\":$(json_val "${SESSION_MIN_ram_used}" num),\"max\":$(json_val "${SESSION_MAX_ram_used}" num)}"
+    state_json+=",\"ram_total\":{\"value\":$(json_val "${ram_total}" num),\"min\":$(json_val "${SESSION_MIN_ram_total}" num),\"max\":$(json_val "${SESSION_MAX_ram_total}" num)}"
+    state_json+=",\"cpu_freq\":{\"value\":$(json_val "${cpu_freq}" num),\"min\":$(json_val "${SESSION_MIN_cpu_freq}" num),\"max\":$(json_val "${SESSION_MAX_cpu_freq}" num)}"
+    state_json+=",\"cpu_voltage\":{\"value\":$(json_val "${cpu_volt}" num),\"min\":$(json_val "${SESSION_MIN_cpu_volt}" num),\"max\":$(json_val "${SESSION_MAX_cpu_volt}" num)}"
+    state_json+=",\"cpu_temp\":{\"value\":$(json_val "${cpu_temp}" num),\"min\":$(json_val "${SESSION_MIN_cpu_temp}" num),\"max\":$(json_val "${SESSION_MAX_cpu_temp}" num)}"
+    state_json+=",\"cpu_usage\":{\"value\":$(json_val "${cpu_usage}" num),\"min\":$(json_val "${SESSION_MIN_cpu_usage}" num),\"max\":$(json_val "${SESSION_MAX_cpu_usage}" num)}"
+    state_json+=",\"nvme_temp\":{\"value\":$(json_val "${nvme_temp}" num),\"min\":$(json_val "${SESSION_MIN_nvme_temp}" num),\"max\":$(json_val "${SESSION_MAX_nvme_temp}" num)}"
+    state_json+=",\"fan_rpm\":{\"value\":$(json_val "${fan_rpm}" num),\"min\":$(json_val "${SESSION_MIN_fan_rpm}" num),\"max\":$(json_val "${SESSION_MAX_fan_rpm}" num)}"
+
+    # Per-core CPU freq and usage
+    if [[ "$PER_CORE" == true && -n "$per_core_data" ]]; then
+        local IFS=','
+        local -a freqs=($per_core_data)
+        local -a usage_arr=(${per_core_usage// / })
+
+        local -a core_ids=()
+        while IFS=: read -r _ val; do
+            val="${val// /}"
+            [[ "$val" =~ ^[0-9]+$ ]] || continue
+            local found=0 c
+            for c in "${core_ids[@]}"; do [[ "$c" == "$val" ]] && found=1 && break; done
+            [[ $found -eq 0 ]] && core_ids+=("$val")
+        done < <(grep "^core id" /proc/cpuinfo)
+
+        state_json+=",\"cpu_core_freq\":{"
+        local first=true i=0
+        while [[ $i -lt ${#freqs[@]} ]]; do
+            local cid="${core_ids[$i]:-$i}"
+            $first || state_json+=","
+            state_json+="\"c${cid}\":$(json_val "${freqs[$i]}" num)"
+            first=false
+            i=$((i + 1))
+        done
+        # Add OFF cores
+        if [[ ${#core_ids[@]} -gt 0 ]]; then
+            local max_core="${core_ids[$((${#core_ids[@]} - 1))]}"
+            local end_core=$((max_core + 1))
+            local rem=$((end_core % 4))
+            [[ $rem -ne 0 ]] && end_core=$((end_core + 4 - rem))
+            local ciid=0
+            while [[ $ciid -lt $end_core ]]; do
+                local found=0 c
+                for c in "${core_ids[@]}"; do [[ "$c" == "$ciid" ]] && found=1 && break; done
+                if [[ $found -eq 0 ]]; then
+                    state_json+=",\"c${ciid}\":null"
+                fi
+                ciid=$((ciid + 1))
+            done
+        fi
+        state_json+="}"
+
+        state_json+=",\"cpu_core_usage\":{"
+        first=true i=0
+        while [[ $i -lt ${#freqs[@]} ]]; do
+            local cid="${core_ids[$i]:-$i}"
+            local u="${usage_arr[$i]:-}"
+            $first || state_json+=","
+            if [[ -n "$u" ]]; then
+                state_json+="\"c${cid}\":$(json_val "$u" num)"
+            else
+                state_json+="\"c${cid}\":null"
+            fi
+            first=false
+            i=$((i + 1))
+        done
+        # Add OFF cores
+        if [[ ${#core_ids[@]} -gt 0 ]]; then
+            local max_core="${core_ids[$((${#core_ids[@]} - 1))]}"
+            local end_core=$((max_core + 1))
+            local rem=$((end_core % 4))
+            [[ $rem -ne 0 ]] && end_core=$((end_core + 4 - rem))
+            local ciid=0
+            while [[ $ciid -lt $end_core ]]; do
+                local found=0 c
+                for c in "${core_ids[@]}"; do [[ "$c" == "$ciid" ]] && found=1 && break; done
+                if [[ $found -eq 0 ]]; then
+                    state_json+=",\"c${ciid}\":null"
+                fi
+                ciid=$((ciid + 1))
+            done
+        fi
+        state_json+="}"
+    fi
+
+    state_json+="}"
+    echo "$state_json" > "${STATE_DIR}/state.json"
 }
 
 service_install() {
@@ -1217,7 +1426,8 @@ live_draw() {
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
-    local fan_rpm="${13}" cpu_volt="${14}"
+    local fan_rpm="${13}" cpu_volt="${14}" per_core_data="${15}" per_core_usage="${16}"
+    local ram_used="${17}" ram_total="${18}"
 
     printf '\033[2J\033[H'
 
@@ -1249,8 +1459,81 @@ live_draw() {
 
     if [[ "$LOG_CPU" == true ]]; then
         printf "${G}CPU${X}\n"
-        printf "  Freq: ${W}%6s${X} MHz   Voltage: ${W}%4s${X} mV\n" "${cpu_freq:--}" "${cpu_volt:--}"
-        printf "  Temp: ${W}%6s${X} °C   Usage:   ${W}%6s${X} %%\n" "${cpu_temp:--}" "${cpu_usage:--}"
+        if [[ "$PER_CORE" == true && -n "$per_core_data" ]]; then
+            local IFS=','
+            local -a freqs=($per_core_data)
+            local -a usage=(${per_core_usage// / })
+
+            # Get enabled core ids from /proc/cpuinfo (for labels)
+            local -a core_ids=()
+            while IFS=: read -r _ val; do
+                val="${val// /}"
+                [[ "$val" =~ ^[0-9]+$ ]] || continue
+                # Add if not already in array
+                local found=0
+                local c
+                for c in "${core_ids[@]}"; do
+                    [[ "$c" == "$val" ]] && found=1 && break
+                done
+                [[ $found -eq 0 ]] && core_ids+=("$val")
+            done < <(grep "^core id" /proc/cpuinfo)
+
+            # Build display list: all core ids from 0 to max+1, mark missing as OFF
+            local -a display_cores=()
+            local -a display_freqs=()
+            local -a display_usage=()
+            if [[ ${#core_ids[@]} -gt 0 ]]; then
+                local max_core="${core_ids[$((${#core_ids[@]} - 1))]}"
+                # Extend to next multiple of 4 to catch fused-off cores
+                local end_core=$((max_core + 1))
+                local rem=$((end_core % 4))
+                [[ $rem -ne 0 ]] && end_core=$((end_core + 4 - rem))
+                local ci=0
+                local di=0
+                local ciid=0
+                while [[ $ciid -lt $end_core ]]; do
+                    if [[ $ci -lt ${#core_ids[@]} && "${core_ids[$ci]}" == "$ciid" ]]; then
+                        display_cores+=("$ciid")
+                        display_freqs+=("${freqs[$di]:-OFF}")
+                        display_usage+=("${usage[$di]:-}")
+                        ci=$((ci + 1))
+                        di=$((di + 1))
+                    else
+                        display_cores+=("$ciid")
+                        display_freqs+=("OFF")
+                        display_usage+=("")
+                    fi
+                    ciid=$((ciid + 1))
+                done
+            fi
+
+            local row=""
+            local i=0
+            while [[ $i -lt ${#display_cores[@]} ]]; do
+                local f="${display_freqs[$i]}"
+                local u="${display_usage[$i]:---}"
+                local cid="${display_cores[$i]}"
+                if [[ "$f" == "OFF" ]]; then
+                    row+="${D}c${cid}:${X}${R}OFF${X}     "
+                else
+                    row+="${D}c${cid}:${X}${W}${f}${X} ${D}${u}%${X} "
+                fi
+                if [[ $((i % 4)) -eq 3 || $i -eq $((${#display_cores[@]} - 1)) ]]; then
+                    printf "  %b\n" "$row"
+                    row=""
+                fi
+                i=$((i + 1))
+            done
+            if [[ -n "$ram_used" && -n "$ram_total" ]]; then
+                local ram_pct=""
+                [[ "$ram_total" -gt 0 ]] 2>/dev/null && ram_pct=$(awk "BEGIN {printf \"%.1f\", $ram_used/$ram_total*100}")
+                printf "  RAM:  ${W}%s/%s${X} MiB (${W}%s%%${X})\n" "$ram_used" "$ram_total" "${ram_pct:---}"
+            fi
+            printf "  Voltage: ${W}%4s${X} mV   Temp: ${W}%6s${X} °C   Usage: ${W}%6s${X} %%\n" "${cpu_volt:--}" "${cpu_temp:--}" "${cpu_usage:--}"
+        else
+            printf "  Freq: ${W}%6s${X} MHz   Voltage: ${W}%4s${X} mV\n" "${cpu_freq:--}" "${cpu_volt:--}"
+            printf "  Temp: ${W}%6s${X} °C   Usage:   ${W}%6s${X} %%\n" "${cpu_temp:--}" "${cpu_usage:--}"
+        fi
         if [[ "$SPARK" == true && ${#LIVE_CPU_TEMP_HIST[@]} -gt 1 ]]; then
             printf "  ${D}usage:${X} "
             live_sparkline LIVE_CPU_USAGE_HIST 40
@@ -1281,7 +1564,8 @@ watch_draw() {
     local gpu_freq="$2" gpu_volt="$3" gpu_temp="$4" gpu_mem="$5"
     local gpu_power="$6" gpu_vram_used="$7" gpu_vram_total="$8"
     local cpu_freq="$9" cpu_temp="${10}" cpu_usage="${11}" nvme_temp="${12}"
-    local fan_rpm="${13}" cpu_volt="${14}"
+    local fan_rpm="${13}" cpu_volt="${14}" per_core_data="${15}" per_core_usage="${16}"
+    local ram_used="${17}" ram_total="${18}"
 
     local R=$'\033[1;31m'
     local G=$'\033[1;34m'
@@ -1292,19 +1576,25 @@ watch_draw() {
     # Build single line
     local line=""
     if [[ "$LOG_GPU" == true ]]; then
-        line+="${R}GPU${X} ${W}${gpu_freq:--}${X}MHz ${gpu_temp:--}°C ${gpu_power:--}W ${gpu_volt:--}mV "
+        line+="${R}GPU${X} ${W}${gpu_freq:--}${X}MHz ${gpu_temp:--}° ${gpu_power:--}W "
     fi
     if [[ "$LOG_CPU" == true ]]; then
-        line+="${G}CPU${X} ${W}${cpu_freq:--}${X}MHz ${cpu_temp:--}°C ${cpu_usage:--}% ${cpu_volt:--}mV "
+        line+="${G}CPU${X} ${W}${cpu_freq:--}${X}MHz ${cpu_temp:--}° ${cpu_usage:--}% "
+    fi
+    if [[ -n "$ram_used" && -n "$ram_total" ]]; then
+        local ram_pct=""
+        [[ "$ram_total" -gt 0 ]] 2>/dev/null && ram_pct=$(awk "BEGIN {printf \"%.0f\", $ram_used/$ram_total*100}")
+        line+="${D}RAM${X} ${ram_pct}% "
     fi
     if [[ -n "$nvme_temp" ]]; then
-        line+="${D}NVMe${X} ${nvme_temp}°C "
+        line+="${D}NV${X} ${nvme_temp}° "
     fi
     if [[ "$LOG_FAN" == true && -n "$fan_rpm" ]]; then
-        line+="${D}Fan${X} ${fan_rpm}RPM "
+        line+="${D}F${X} ${fan_rpm} "
     fi
 
-    printf '\r\033[K%s' "$line"
+    # Clear line and print
+    printf '\033[2K\r%s' "$line"
 }
 
 # --- Main loop ---
@@ -1335,11 +1625,22 @@ while true; do
         }
     fi
 
+    # RAM
+    ram_used="" ram_total=""
+    ram_used=$(read_ram_used) || true
+    ram_total=$(read_ram_total) || true
+    [[ "$SERVICE" == true ]] && {
+        update_min_max "ram_used" "$ram_used"
+        update_min_max "ram_total" "$ram_total"
+    }
+
     # CPU
-    cpu_freq="" cpu_temp="" cpu_usage="" nvme_temp="" per_core_data="" cpu_volt=""
+    cpu_freq="" cpu_temp="" cpu_usage="" nvme_temp="" per_core_data="" cpu_volt="" per_core_usage=""
     if [[ "$LOG_CPU" == true ]]; then
         if [[ "$PER_CORE" == true ]]; then
             per_core_data=$(read_cpu_freq_per_core) || true
+            read_cpu_usage_per_core
+            per_core_usage="$_PERCORE_USAGE_RESULT"
             # Calculate average for watch/live display
             cpu_freq=$(echo "$per_core_data" | awk -F',' '{sum=0; for(i=1;i<=NF;i++) sum+=$i; if(NF>0) printf "%.0f", sum/NF; else print ""}')
         else
@@ -1371,7 +1672,8 @@ while true; do
     if [[ "$WATCH" == true ]]; then
         watch_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                    "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt"
+                   "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt" "$per_core_data" "$per_core_usage" \
+                   "$ram_used" "$ram_total"
     elif [[ "$LIVE" == true ]]; then
         # Collect history for sparklines
         [[ -n "$gpu_temp" ]] && LIVE_GPU_TEMP_HIST+=("$gpu_temp")
@@ -1386,16 +1688,19 @@ while true; do
 
         live_draw "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                   "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt"
+                  "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$fan_rpm" "$cpu_volt" "$per_core_data" "$per_core_usage" \
+                  "$ram_used" "$ram_total"
     else
         if [[ -n "$OUTPUT" ]]; then
             case "$FORMAT" in
                 csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" >&3 ;;
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" \
+                              "$ram_used" "$ram_total" >&3 ;;
                 json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" >&3 ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" \
+                                "$ram_used" "$ram_total" >&3 ;;
             esac
         fi
 
@@ -1403,10 +1708,12 @@ while true; do
             case "$FORMAT" in
                 csv) emit_csv "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                               "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" ;;
+                              "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" \
+                              "$ram_used" "$ram_total" ;;
                 json) emit_json "$ts" "$gpu_freq" "$gpu_volt" "$gpu_temp" "$gpu_mem" \
                                 "$gpu_power" "$gpu_vram_used" "$gpu_vram_total" \
-                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" ;;
+                                "$cpu_freq" "$cpu_temp" "$cpu_usage" "$nvme_temp" "$per_core_data" "$fan_rpm" "$cpu_volt" \
+                                "$ram_used" "$ram_total" ;;
             esac
         fi
     fi

@@ -120,10 +120,18 @@ Defaults from config.toml if no mode given.
 |--------|-------------|--------|
 | `cpu_freq_mhz` | Average CPU frequency (MHz) | `/proc/cpuinfo` |
 | `cpu_voltage_mv` | CPU core voltage (mV) | SMU (embedded) |
-| `cpu0_freq_mhz` .. `cpuN_freq_mhz` | Per-core frequency (with `--per-core`) | SMU (actual freq) |
+| `cpuN_freq_mhz` | Per-core frequency by physical core id (with `--per-core`) | SMU (actual freq) |
+| `cpuN_usage_pct` | Per-core usage by physical core id (with `--per-core`) | `/proc/stat` |
 | `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
 | `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
 | `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
+
+### Memory
+
+| Column | Description | Source |
+|--------|-------------|--------|
+| `ram_used_mib` | Used RAM (MiB) | `/proc/meminfo` |
+| `ram_total_mib` | Total RAM (MiB) | `/proc/meminfo` |
 
 ### Fan
 
@@ -163,7 +171,7 @@ Defaults from config.toml if no mode given.
 # Rotate logs at 10MB, keep 3 backups
 250mon --max-size 10M --rotate 3
 
-# Log per-core CPU frequencies
+# Log per-core CPU frequencies (and per-core usage)
 250mon --per-core -c 10
 
 # List GPU clock states
@@ -314,6 +322,11 @@ The `--per-core` flag uses SMU to read **actual** core frequencies, which differ
 
 - `/proc/cpuinfo` reports the **requested** frequency (may show max even when idle)
 - SMU reports the **real** frequency (shows actual clock, including power-gated cores)
+
+All 8 physical cores are read positionally, so the two cores the BC-250 ships with
+disabled (cores 3 and 7) appear automatically once unlocked (e.g. via the community
+core-presence mask unlock, `SMN 0x5A870` 0x77 → 0xFF); disabled cores simply show
+as empty until then.
 
 Example:
 ```

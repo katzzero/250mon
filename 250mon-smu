@@ -165,8 +165,7 @@ def main():
                 freqs = []
                 for i in range(8):
                     f = core_freq(t, m, i)
-                    if f is not None:
-                        freqs.append(str(f))
+                    freqs.append(str(f) if f is not None else "")
                 print(",".join(freqs))
             else:
                 print(f"Unknown command: {cmd}", file=sys.stderr)
