@@ -85,7 +85,7 @@ Plotting:
   --plot-metrics M    Metrics to plot (comma-separated, passed to 250mon-draw)
 
 Advanced:
-  --per-core          Log per-core CPU frequencies instead of average
+  --per-core          Log per-core CPU frequencies, usage, and temperatures
   --list-states       List GPU clock states and exit
 
 Service:
@@ -131,6 +131,7 @@ Defaults from config.toml if no mode given.
 | `cpu_voltage_mv` | CPU core voltage (mV) | SMU (embedded) |
 | `cpuN_freq_mhz` | Per-core frequency by physical core id (with `--per-core`) | SMU (actual freq) |
 | `cpuN_usage_pct` | Per-core usage by physical core id (with `--per-core`) | `/proc/stat` |
+| `cpuN_temp_c` | Per-core temperature by physical core id (with `--per-core`) | gpu_metrics sysfs |
 | `cpu_temp_c` | CPU temperature (°C) | k10temp hwmon |
 | `cpu_usage_pct` | Aggregate CPU usage (%) | `/proc/stat` |
 | `nvme_temp_c` | NVMe temperature (°C) | nvme hwmon |
@@ -180,7 +181,7 @@ Defaults from config.toml if no mode given.
 # Rotate logs at 10MB, keep 3 backups
 250mon --max-size 10M --rotate 3
 
-# Log per-core CPU frequencies (and per-core usage)
+# Log per-core CPU frequencies, usage, and temperatures
 250mon --per-core -c 10
 
 # List GPU clock states
