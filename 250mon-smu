@@ -184,6 +184,13 @@ def per_core_temp():
 
 
 def main():
+    # per-core-temp only reads the world-readable gpu_metrics sysfs node and
+    # needs no PCI/SMU access, so handle it before any privilege elevation.
+    # Otherwise this command would demand a sudo password for nothing.
+    if len(sys.argv) > 1 and sys.argv[1] == "per-core-temp":
+        print(per_core_temp())
+        return
+
     # Auto-elevate with sudo if needed (PCI config requires root)
     if os.geteuid() != 0:
         try:
