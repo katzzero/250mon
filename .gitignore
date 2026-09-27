@@ -1,6 +1,7 @@
 *.log
 *.csv
 *.jsonl
+__pycache__/
 *.swp
 *.swo
 *~

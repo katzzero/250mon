@@ -6,6 +6,7 @@ https://github.com/bc250-collective/bc250_smu_oc (MIT License)
 """
 
 import fcntl
+import glob
 import os
 import struct
 import sys
@@ -128,6 +129,29 @@ def core_freq(t, m, core_id):
     return None
 
 
+def gpu_metrics_path():
+    """Locate the amdgpu gpu_metrics node.
+
+    The card number (card0, card1, ...) is not stable across boots,
+    so discover the device via its hwmon name instead of hardcoding.
+    """
+    for name_path in sorted(glob.glob("/sys/class/drm/card[0-9]/device/hwmon/hwmon*/name")):
+        try:
+            with open(name_path) as f:
+                if f.read().strip() != "amdgpu":
+                    continue
+        except OSError:
+            continue
+        dev_dir = os.path.dirname(os.path.dirname(name_path))
+        path = os.path.join(dev_dir, "gpu_metrics")
+        if os.path.isfile(path):
+            return path
+    # Fallback: first card exposing gpu_metrics
+    for path in sorted(glob.glob("/sys/class/drm/card[0-9]/device/gpu_metrics")):
+        return path
+    return None
+
+
 def per_core_temp():
     """Read per-core CPU temperatures from gpu_metrics sysfs.
 
@@ -135,19 +159,22 @@ def per_core_temp():
     Empty string for unavailable cores (0xFFFF).
     Example: "56.0,60.8,60.0,59.2,57.0,57.5,,"
     """
-    path = "/sys/class/drm/card0/device/gpu_metrics"
+    path = gpu_metrics_path()
+    if not path:
+        return ""
     try:
         with open(path, "rb") as f:
             data = f.read()
     except (FileNotFoundError, PermissionError):
         return ""
 
-    if len(data) < 24:
+    # Table layout: 4-byte common_header, then u16 LE temps x100, one per core
+    if len(data) < 4 + 8 * 2:
         return ""
 
     temps = []
     for i in range(8):
-        offset = 8 + (i * 2)
+        offset = 4 + (i * 2)
         val = struct.unpack_from("<H", data, offset)[0]
         if val == 0xFFFF:
             temps.append("")

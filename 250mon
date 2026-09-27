@@ -774,10 +774,25 @@ read_cpu_freq_per_core() {
 
 # --- Per-core CPU temperature ---
 read_cpu_per_core_temp() {
+    # gpu_metrics has one temp slot per physical core slot 0-7; remap each
+    # slot by its core id so the output stays parallel with
+    # read_cpu_freq_per_core when /proc/cpuinfo has fused-off core gaps
     local smu_helper
     smu_helper=$(find_smu_helper)
     if [[ -n "$smu_helper" ]]; then
-        "$smu_helper" per-core-temp 2>/dev/null
+        local smu_out
+        smu_out=$("$smu_helper" per-core-temp 2>/dev/null) || true
+        if [[ -n "$smu_out" ]]; then
+            local IFS=','
+            local -a smu_vals=($smu_out)
+            local out="" cid
+            while read -r cid; do
+                [[ -n "$out" ]] && out+=","
+                out+="${smu_vals[$cid]:-}"
+            done < <(grep "^core id" /proc/cpuinfo | awk '{print $4}' | sort -n -u)
+            echo "$out"
+            return 0
+        fi
     fi
 }
 
